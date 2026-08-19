@@ -1,0 +1,2 @@
+# generated from version.txt at build time - do not edit
+__version__ = "@PROJECT_VERSION@"

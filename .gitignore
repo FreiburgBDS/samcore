@@ -1,0 +1,30 @@
+# build artifacts
+build/
+build-*/
+dist/
+*.egg-info/
+*.so
+*.dylib
+*.dll
+*.whl
+result
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+
+# nix
+.nix-shell/
+
+# test data: keep the sample testdata files, ignore everything else
+tests/data/*
+!tests/data/testdata.h5sam
+!tests/data/testdata.h5samd
+
+# All markdown/text except README.md and version.txt
+*.md
+*.txt
+!version.txt
+!README.md

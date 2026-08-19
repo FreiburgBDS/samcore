@@ -1,0 +1,3 @@
+[submodule "external/pocketfft"]
+	path = external/pocketfft
+	url = https://gitlab.mpcdf.mpg.de/mtr/pocketfft.git

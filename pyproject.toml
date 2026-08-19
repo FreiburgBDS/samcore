@@ -1,0 +1,62 @@
+[build-system]
+requires = ["scikit-build-core>=0.10", "nanobind>=2.2", "numpy>=1.26"]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "samcore"
+description = "SAM (Scanning Acoustic Microscopy) core data processing with a C++ (libsamcore) backend"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.9"
+dependencies = ["numpy>=1.26"]
+dynamic = ["version"]
+authors = [
+    {name = "Ahmet Cemal Alicioglu", email = "ahmet.alicioglu@inatech.uni-freiburg.de"},
+    {name = "Nicolas Wilhelm", email = "nic9323@gmail.com"}
+]
+
+[project.optional-dependencies]
+test = ["pytest"]
+
+[tool.scikit-build]
+cmake.source-dir = "."
+cmake.build-type = "Release"
+build-dir = "build/{wheel_tag}"
+wheel.packages = ["src/samcore"]
+wheel.exclude = [
+  "**/__pycache__/**",
+  "**/*.pyc",
+]
+sdist.include = [
+  "CMakeLists.txt",
+  "cmake/**",
+  "include/**",
+  "src/**",
+  "version.txt",
+  "LICENSE",
+  "README.md",
+]
+sdist.exclude = [
+  "**/build/**",
+  "**/build-*/**",
+  "**/__pycache__/**",
+  "**/*.pyc",
+  "**/*.so",
+]
+
+[tool.scikit-build.cmake.define]
+SAMCORE_BUILD_PYTHON = "ON"
+SAMCORE_BUILD_TESTS = "OFF"
+SAMCORE_BUILD_EXAMPLES = "OFF"
+
+# read the project version from version.txt
+[[tool.dynamic-metadata]]
+field = "version"
+provider = "scikit_build_core.metadata.regex"
+input = "version.txt"
+regex = "(?P<v>\\d+\\.\\d+\\.\\d+)"
+result = "{v}"
+
+[tool.pytest.ini_options]
+testpaths = ["tests/python"]
