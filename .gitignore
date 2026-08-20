@@ -28,3 +28,12 @@ tests/data/*
 *.txt
 !version.txt
 !README.md
+
+# Notebooks
+*.ipynb
+
+# Images
+*.tiff
+*.tif
+*.TIFF
+*.png

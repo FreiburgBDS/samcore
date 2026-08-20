@@ -1,36 +1,11 @@
-# samcore._dataset - SAMDataset python-side API layer (spatial recarray,
-# splits, batch/patch iteration, exports).
+# samcore._dataset - SAMDataset python-side API layer (splits, batch/patch
+# iteration, exports).  The typed properties (train_indices, test_indices,
+# shuffled, spatial, dataset_label_names, handler_ids, cube_counts) are
+# bound in C++ (see src/bindings.cpp).
 
 import numpy as np
 
 from samcore._samcore import SAMDataset
-
-_SPATIAL_DTYPE = np.dtype([("idx", "i4"), ("x", "f4"), ("y", "f4")])
-
-
-def _dataset_train_indices_get(self):
-    return np.asarray(self._train_indices, dtype=np.int64)
-
-
-def _dataset_train_indices_set(self, value):
-    self._train_indices = np.asarray(value, dtype=np.int64).tolist()
-
-
-def _dataset_test_indices_get(self):
-    return np.asarray(self._test_indices, dtype=np.int64)
-
-
-def _dataset_test_indices_set(self, value):
-    self._test_indices = np.asarray(value, dtype=np.int64).tolist()
-
-
-def _dataset_spatial(self):
-    idx, x, y = self._spatial_arrays()
-    block = np.empty(len(idx), dtype=_SPATIAL_DTYPE)
-    block["idx"] = idx
-    block["x"] = x
-    block["y"] = y
-    return block.view(np.recarray)
 
 
 def _dataset_preprocess(self, strategy, **kwargs):
@@ -262,20 +237,6 @@ def _dataset_num_test_batches(self, batch_size=64):
     return int(np.ceil(len(self.test_indices) / batch_size))
 
 
-def _dataset_dataset_label_names(self):
-    self._require_labels()
-    return list(self.labels.label_names)
-
-
-def _dataset_handler_ids(self):
-    return self.spatial["idx"]
-
-
-def _dataset_cube_counts(self):
-    return {int(i): int(n * c)
-            for i, (n, c) in enumerate(self.cube_shapes)}
-
-
 def _dataset_convert_from_paths(cls, input_paths, output_path, pad_value=0.0,
                                 unsupervised=None):
     from samcore._io import io
@@ -284,14 +245,14 @@ def _dataset_convert_from_paths(cls, input_paths, output_path, pad_value=0.0,
     return cls.load(output_path)
 
 
-SAMDataset.train_indices = property(_dataset_train_indices_get,
-                                    _dataset_train_indices_set)
-SAMDataset.test_indices = property(_dataset_test_indices_get,
-                                   _dataset_test_indices_set)
-SAMDataset.shuffled = property(lambda self: self._shuffled,
-                               lambda self, v: setattr(self, "_shuffled",
-                                                       bool(v)))
-SAMDataset.spatial = property(_dataset_spatial)
+def _dataset_len(self):
+    return self.X.shape[0]
+
+
+def _dataset_iter(self):
+    return iter(self.batches("train"))
+
+
 SAMDataset.preprocess = _dataset_preprocess
 SAMDataset.transform = _dataset_transform
 SAMDataset.train_test_split = _dataset_train_test_split
@@ -306,10 +267,7 @@ SAMDataset.to_dict = _dataset_to_dict
 SAMDataset.relabel = _dataset_relabel
 SAMDataset.num_train_batches = _dataset_num_train_batches
 SAMDataset.num_test_batches = _dataset_num_test_batches
-SAMDataset.dataset_label_names = property(_dataset_dataset_label_names)
-SAMDataset.handler_ids = property(_dataset_handler_ids)
-SAMDataset.cube_counts = property(_dataset_cube_counts)
 SAMDataset._require_labels = _dataset_require_labels
 SAMDataset.convert_from_paths = classmethod(_dataset_convert_from_paths)
-SAMDataset.__len__ = lambda self: self.X.shape[0]
-SAMDataset.__iter__ = lambda self: iter(self.batches("train"))
+SAMDataset.__len__ = _dataset_len
+SAMDataset.__iter__ = _dataset_iter

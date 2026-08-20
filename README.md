@@ -1,6 +1,6 @@
 # samcore
 
-Python package and C++20 library for Scanning Acoustic Microscopy (SAM) core data processing.
+Python package and C++ library for Scanning Acoustic Microscopy (SAM) core data processing.
 
 ## Cloning
 
@@ -19,7 +19,23 @@ git submodule update --init --recursive
 
 ## Installation & Dependencies
 
-### Nix
+Install the system dependencies for your platform (below), then either
+`pip install .` for the Python package or build the C++ library with CMake.
+
+### Dependencies
+
+Requires a C++20 compiler and CMake.  Dependencies:
+
+- **HDF5** (C++ bindings): used for `.h5sam`/`.h5samd` file I/O.  Obtained
+  via the nix dev shell, a distro package, or `HDF5_ROOT`.
+- **nlohmann_json**: JSON serialization of headers and labels.  Used when
+  found as a system package, otherwise fetched automatically (header-only).
+- **PocketFFT**: FFT backend, vendored as a git submodule
+  (`external/pocketfft`).
+- **nanobind** + **numpy**: build-time dependencies of the Python package
+  (installed automatically by pip).
+
+**Nix:**
 ```bash
 nix-shell
 ```
@@ -41,6 +57,9 @@ sudo apt-get update && sudo apt-get -y install cmake ninja-build build-essential
 sudo dnf install -y cmake ninja-build gcc-c++ hdf5-devel python3-devel python3-pip
 ```
 
+### MacOS and Windows
+Not yet tested.
+
 ## Python package (samcore)
 
 ### Installation
@@ -51,8 +70,7 @@ pip install .
 
 ### Usage
 ```python
-import samcore
-from samcore import SAMScan, SAMHeader, SAMLabels, SAMDataset
+from samcore import SAMScan, SAMDataset
 
 scan = SAMScan("testdata.h5sam")       # .h5sam files
 img = scan.image("absmax")         # (nlines, cols)
@@ -65,12 +83,23 @@ dataset.preprocess("lp", cutoff=10.0, fs=2.5e3)
 `SAMScan(path, mmap=True)` keeps h5sam signal data on disk
 until first accessed.
 
+The wheel ships `.pyi` type stubs plus a `py.typed` marker (generated at
+build time by nanobind's stubgen), so static type checkers and IDEs see the
+full typed API.
+
 ## C++ library (libsamcore)
 
 ### Build
 
 ```sh
 cmake -B build -G Ninja
+cmake --build build
+```
+
+Optional executables (`bench`, `gen_data`, see below):
+
+```sh
+cmake -B build -G Ninja -DSAMCORE_BUILD_EXECUTABLES=ON
 cmake --build build
 ```
 
@@ -98,7 +127,35 @@ Note: OpenMP is an implementation detail of the static library and is not
 propagated through the CMake package.  Consumers linking `libsamcore.a`
 enable it themselves (`find_package(OpenMP)` + link `OpenMP::OpenMP_CXX`).
 
-## Tests
+## Developers
+
+### Generate Stubs
+
+The wheel ships `.pyi` type stubs plus a `py.typed` marker.  They are
+generated automatically at build time by nanobind's stubgen: a CMake custom
+command in the `SAMCORE_BUILD_PYTHON` block stages an importable copy of the
+package (pure-Python modules + generated `_version.py` + the compiled
+extension) and runs `python -m nanobind.stubgen`.  No manual step is needed
+when running `pip install .`.
+
+To regenerate manually after installing `nanobind` into your environment:
+
+```sh
+python -m nanobind.stubgen -m samcore -m samcore._samcore -m samcore._scan \
+  -m samcore._labels -m samcore._dataset -m samcore._io -M py.typed
+```
+
+### Executables
+
+Optional tools, built with `-DSAMCORE_BUILD_EXECUTABLES=ON`:
+
+- `bench` - OpenMP scaling smoke benchmark (`./bench [scans_x scans_y scanlen]`).
+- `gen_data` - deterministic random test-data generator (gated sine burst +
+  gaussian noise, int8), writing `.h5sam` (with per-scan starts) or a
+  multi-cube `.h5samd`.  Used to (re)generate `tests/data/testdata.h5sam`
+  and `tests/data/testdata.h5samd`.
+
+### Tests
 
 ```sh
 # C++ (googletest) - debug build with sanitizers

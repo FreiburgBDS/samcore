@@ -48,7 +48,7 @@ sdist.exclude = [
 [tool.scikit-build.cmake.define]
 SAMCORE_BUILD_PYTHON = "ON"
 SAMCORE_BUILD_TESTS = "OFF"
-SAMCORE_BUILD_EXAMPLES = "OFF"
+SAMCORE_BUILD_EXECUTABLES = "OFF"
 
 # read the project version from version.txt
 [[tool.dynamic-metadata]]

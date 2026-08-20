@@ -80,22 +80,28 @@ def _scan_compute_stft(self, nperseg=256, noverlap=128):
     return self._compute_stft(nperseg, noverlap)
 
 
-def _scan_starts_get(self):
-    v = self._starts
-    return None if v is None else np.asarray(v, dtype=np.int32)
+def _scan_downsampled(self, factor, mode="decimate"):
+    return self._downsampled(factor, mode)
 
 
-def _scan_starts_set(self, value):
-    self._starts = None if value is None else np.asarray(
-        value, dtype=np.int32).tolist()
+def _scan_rotated(self, degrees):
+    return self._rotated(degrees)
 
 
-def _scan_labels_get(self):
-    return np.asarray(self.samlabels.labels)
+def _scan_mirrored(self, orientation):
+    return self._mirrored(orientation)
 
 
-def _scan_label_names_get(self):
-    return list(self.samlabels.label_names)
+def _scan_hash(self):
+    return hash((self.header_hash(), self.data.tobytes()))
+
+
+def _scan_num_scans(self):
+    return len(self)
+
+
+def _scan_iter(self):
+    return iter(self.data)
 
 
 SAMScan.compute_stft = _scan_compute_stft
@@ -106,17 +112,9 @@ SAMScan.zgate = _scan_zgate
 SAMScan.rectangle_select = _scan_rectangle_select
 SAMScan.time_range_select = _scan_time_range_select
 SAMScan.handler_from_data = classmethod(_scan_handler_from_data)
-SAMScan.downsampled = lambda self, factor, mode="decimate": self._downsampled(
-    factor, mode)
-SAMScan.rotated = lambda self, degrees: self._rotated(degrees)
-SAMScan.mirrored = lambda self, orientation: self._mirrored(orientation)
-SAMScan.starts = property(_scan_starts_get, _scan_starts_set)
-SAMScan.labels = property(_scan_labels_get)
-SAMScan.label_names = property(_scan_label_names_get)
-SAMScan.timescale = property(lambda self: self.time())
-SAMScan.downsample_factor = property(
-    lambda self: self.header.downsample_factor)
-SAMScan.__hash__ = lambda self: hash(
-    (self.header_hash(), self.data.tobytes()))
-SAMScan.num_scans = lambda self: len(self)
-SAMScan.__iter__ = lambda self: iter(self.data)
+SAMScan.downsampled = _scan_downsampled
+SAMScan.rotated = _scan_rotated
+SAMScan.mirrored = _scan_mirrored
+SAMScan.__hash__ = _scan_hash
+SAMScan.num_scans = _scan_num_scans
+SAMScan.__iter__ = _scan_iter
