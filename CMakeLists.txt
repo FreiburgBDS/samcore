@@ -161,8 +161,14 @@ if(SAMCORE_BUILD_PYTHON)
   endif()
 
   # Per-version extension (no abi3): keeps wheel builds uniform across the
-  # whole CPython range.
-  nanobind_add_module(_samcore NB_DOMAIN numpy src/bindings.cpp)
+  # whole CPython range.  Bindings are split per type under src/bindings/.
+  nanobind_add_module(_samcore NB_DOMAIN numpy
+    src/bindings/module.cpp
+    src/bindings/header.cpp
+    src/bindings/labels.cpp
+    src/bindings/scan.cpp
+    src/bindings/dataset.cpp
+    src/bindings/submodules.cpp)
   target_link_libraries(_samcore PRIVATE samcore)
 
   if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
@@ -176,4 +182,55 @@ if(SAMCORE_BUILD_PYTHON)
                  "${CMAKE_CURRENT_BINARY_DIR}/_version.py" @ONLY)
   install(FILES "${CMAKE_CURRENT_BINARY_DIR}/_version.py"
           DESTINATION samcore)
+
+  # ---- typed stubs (nanobind stubgen) -------------------------------------
+  # Generate .pyi stubs + the py.typed marker at build time and ship them
+  # in the wheel.  stubgen must be able to import the assembled samcore
+  # package (pure Python modules + generated _version.py + the compiled
+  # extension), so stage an importable copy of the package in the build
+  # tree, run stubgen against it, and install the results.
+  execute_process(
+    COMMAND "${Python_EXECUTABLE}" -c "import nanobind.stubgen"
+    RESULT_VARIABLE SAMCORE_HAS_NB_STUBGEN OUTPUT_QUIET ERROR_QUIET)
+  if(SAMCORE_HAS_NB_STUBGEN EQUAL 0)
+    set(SAMCORE_STUB_DIR "${CMAKE_CURRENT_BINARY_DIR}/_stub")
+    set(SAMCORE_STUB_PKG "${SAMCORE_STUB_DIR}/samcore")
+
+    add_custom_command(
+      OUTPUT "${SAMCORE_STUB_PKG}/py.typed"
+      COMMAND ${CMAKE_COMMAND} -E rm -rf "${SAMCORE_STUB_PKG}"
+      COMMAND ${CMAKE_COMMAND} -E copy_directory
+              "${CMAKE_CURRENT_SOURCE_DIR}/src/samcore" "${SAMCORE_STUB_PKG}"
+      COMMAND ${CMAKE_COMMAND} -E rm -rf "${SAMCORE_STUB_PKG}/__pycache__"
+      COMMAND ${CMAKE_COMMAND} -E copy
+              "${CMAKE_CURRENT_BINARY_DIR}/_version.py"
+              "${SAMCORE_STUB_PKG}/_version.py"
+      COMMAND ${CMAKE_COMMAND} -E copy
+              "$<TARGET_FILE:_samcore>"
+              "${SAMCORE_STUB_PKG}/$<TARGET_FILE_NAME:_samcore>"
+      COMMAND ${CMAKE_COMMAND} -E env "PYTHONPATH=${SAMCORE_STUB_DIR}"
+              "${Python_EXECUTABLE}" -m nanobind.stubgen
+              -m samcore -m samcore._samcore -m samcore._scan
+              -m samcore._labels -m samcore._dataset -m samcore._io
+              -M "${SAMCORE_STUB_PKG}/py.typed" -q
+      DEPENDS _samcore "${CMAKE_CURRENT_BINARY_DIR}/_version.py"
+      COMMENT "Generating samcore .pyi stubs (nanobind stubgen)"
+      VERBATIM)
+    add_custom_target(samcore_stub ALL
+      DEPENDS "${SAMCORE_STUB_PKG}/py.typed")
+
+    install(FILES
+      "${SAMCORE_STUB_PKG}/__init__.pyi"
+      "${SAMCORE_STUB_PKG}/_samcore.pyi"
+      "${SAMCORE_STUB_PKG}/_scan.pyi"
+      "${SAMCORE_STUB_PKG}/_labels.pyi"
+      "${SAMCORE_STUB_PKG}/_dataset.pyi"
+      "${SAMCORE_STUB_PKG}/_io.pyi"
+      "${SAMCORE_STUB_PKG}/py.typed"
+      DESTINATION samcore)
+  else()
+    message(STATUS
+      "nanobind.stubgen not importable by ${Python_EXECUTABLE}; "
+      "skipping .pyi stub generation")
+  endif()
 endif()

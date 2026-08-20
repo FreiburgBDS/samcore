@@ -78,8 +78,3 @@ def _labels_relabel(self, mapping):
 
 
 SAMLabels.relabel = _labels_relabel
-
-_labels_num_classes = SAMLabels.num_classes
-_labels_unique_labels = SAMLabels.unique_labels
-SAMLabels.num_classes = property(lambda self: _labels_num_classes(self))
-SAMLabels.unique_labels = property(lambda self: _labels_unique_labels(self))
