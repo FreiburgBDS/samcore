@@ -381,6 +381,7 @@ NB_MODULE(_samcore, m) {
         .def_prop_ro("loaded", [](const sam_scan& s) { return s.loaded(); })
         .def("load", [](sam_scan& s) { s.load(); })
         .def_prop_ro("nlines", [](const sam_scan& s) { return s.nlines(); })
+        .def_prop_ro("rows", [](const sam_scan& s) { return s.nlines(); })
         .def_prop_ro("cols", [](const sam_scan& s) { return s.cols(); })
         .def_prop_ro("scanlen", [](const sam_scan& s) { return s.scanlen(); })
         .def_prop_ro("samplerate", [](const sam_scan& s) { return s.samplerate(); })
