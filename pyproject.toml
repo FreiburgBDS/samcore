@@ -22,7 +22,7 @@ test = ["pytest"]
 [tool.scikit-build]
 cmake.source-dir = "."
 cmake.build-type = "Release"
-build-dir = "build/{wheel_tag}"
+build-dir = "_skbuild/{wheel_tag}"
 wheel.packages = ["src/samcore"]
 wheel.exclude = [
   "**/__pycache__/**",

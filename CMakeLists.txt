@@ -188,7 +188,9 @@ if(SAMCORE_BUILD_PYTHON)
   # in the wheel.  stubgen must be able to import the assembled samcore
   # package (pure Python modules + generated _version.py + the compiled
   # extension), so stage an importable copy of the package in the build
-  # tree, run stubgen against it, and install the results.
+  # tree, run stubgen against it, and install the results.  Stub generation
+  # is optional tooling and never fails the build (see cmake/stubgen.cmake);
+  # the install below uses OPTIONAL so a skipped run ships no stubs.
   execute_process(
     COMMAND "${Python_EXECUTABLE}" -c "import nanobind.stubgen"
     RESULT_VARIABLE SAMCORE_HAS_NB_STUBGEN OUTPUT_QUIET ERROR_QUIET)
@@ -208,11 +210,10 @@ if(SAMCORE_BUILD_PYTHON)
       COMMAND ${CMAKE_COMMAND} -E copy
               "$<TARGET_FILE:_samcore>"
               "${SAMCORE_STUB_PKG}/$<TARGET_FILE_NAME:_samcore>"
-      COMMAND ${CMAKE_COMMAND} -E env "PYTHONPATH=${SAMCORE_STUB_DIR}"
-              "${Python_EXECUTABLE}" -m nanobind.stubgen
-              -m samcore -m samcore._samcore -m samcore._scan
-              -m samcore._labels -m samcore._dataset -m samcore._io
-              -M "${SAMCORE_STUB_PKG}/py.typed" -q
+      COMMAND ${CMAKE_COMMAND} -DSTUB_DIR=${SAMCORE_STUB_DIR}
+              -DSTUB_PKG=${SAMCORE_STUB_PKG}
+              -DPYTHON=${Python_EXECUTABLE}
+              -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/stubgen.cmake"
       DEPENDS _samcore "${CMAKE_CURRENT_BINARY_DIR}/_version.py"
       COMMENT "Generating samcore .pyi stubs (nanobind stubgen)"
       VERBATIM)
@@ -227,7 +228,8 @@ if(SAMCORE_BUILD_PYTHON)
       "${SAMCORE_STUB_PKG}/_dataset.pyi"
       "${SAMCORE_STUB_PKG}/_io.pyi"
       "${SAMCORE_STUB_PKG}/py.typed"
-      DESTINATION samcore)
+      DESTINATION samcore
+      OPTIONAL)
   else()
     message(STATUS
       "nanobind.stubgen not importable by ${Python_EXECUTABLE}; "
