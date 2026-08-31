@@ -45,10 +45,10 @@ def _dataset_train_test_split(self, test_size=0.2, random_state=None,
         np.random.seed(random_state)
     if shuffle:
         np.random.shuffle(indices)
-        self.shuffled = True
     split_idx = int(total * (1 - test_size))
     self.train_indices = indices[:split_idx]
     self.test_indices = indices[split_idx:]
+    self.shuffled = shuffle
 
 
 def _dataset_stratified_train_test_split(self, test_size=0.2,
@@ -56,7 +56,7 @@ def _dataset_stratified_train_test_split(self, test_size=0.2,
     self._require_labels()
     self.train_indices, self.test_indices = self.labels.stratified_split(
         test_size=test_size, random_state=random_state)
-    self.shuffled = False
+    self.shuffled = True
 
 
 def _dataset_stratified_split_by_cube(self, test_size=0.2, random_state=None):
@@ -71,11 +71,15 @@ def _dataset_stratified_split_by_cube(self, test_size=0.2, random_state=None):
         n_test = max(1, int(len(idx) * test_size))
         test_parts.append(idx[:n_test])
         train_parts.append(idx[n_test:])
-    self.train_indices = np.concatenate(train_parts)
-    self.test_indices = np.concatenate(test_parts)
-    rng.shuffle(self.train_indices)
-    rng.shuffle(self.test_indices)
-    self.shuffled = False
+    # train_indices/test_indices are copy-returning properties, so the
+    # shuffle must happen on local arrays before assignment.
+    train = np.concatenate(train_parts)
+    test = np.concatenate(test_parts)
+    rng.shuffle(train)
+    rng.shuffle(test)
+    self.train_indices = train
+    self.test_indices = test
+    self.shuffled = True
 
 
 def _dataset_split_by_label(self, label, test_size=None):
@@ -102,6 +106,7 @@ def _dataset_split_by_label(self, label, test_size=None):
         test_idx = matching
     self.test_indices = test_idx
     self.train_indices = np.setdiff1d(np.arange(len(self)), test_idx)
+    self.shuffled = test_size is not None
 
 
 def _dataset_batches(self, split="train", shuffle=True, seed=None,

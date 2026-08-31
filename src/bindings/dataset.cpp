@@ -134,24 +134,26 @@ void bind_dataset(nb::module_& m) {
                          return to_numpy(
                              std::vector<std::int64_t>(d.train_indices()));
                      },
-                     [](sam_dataset& d, std::vector<std::int64_t> v) {
-                         d.train_indices() = std::move(v);
-                     },
-                     "Row indices of ``X`` used for training.")
+[](sam_dataset& d, std::vector<std::int64_t> v) {
+                          d.train_indices() = std::move(v);
+                      },
+                      "Row indices of ``X`` used for training.  Returns a "
+                      "fresh copy: in-place numpy mutation is not persisted.")
         .def_prop_rw("test_indices",
                      [](sam_dataset& d) -> nb::object {
                          return to_numpy(
                              std::vector<std::int64_t>(d.test_indices()));
                      },
-                     [](sam_dataset& d, std::vector<std::int64_t> v) {
-                         d.test_indices() = std::move(v);
-                     },
-                     "Row indices of ``X`` used for testing.")
+[](sam_dataset& d, std::vector<std::int64_t> v) {
+                          d.test_indices() = std::move(v);
+                      },
+                      "Row indices of ``X`` used for testing.  Returns a "
+                      "fresh copy: in-place numpy mutation is not persisted.")
         .def_prop_rw("shuffled",
                      [](const sam_dataset& d) { return d.shuffled(); },
                      [](sam_dataset& d, bool v) { d.set_shuffled(v); },
-                     "Whether the samples have been shuffled by a "
-                             "split.")
+                     "Whether the last split randomized the sample indices "
+                             "(informational; reset to False on load).")
         .def_prop_ro("spatial", [](sam_dataset& d) {
             auto sp = d.spatial();
             std::vector<std::int32_t> idx(sp.size());

@@ -411,6 +411,129 @@ class TestSplitting:
         with pytest.raises(TypeError):
             ds.split_by_label(1.5)
 
+    def test_train_test_split_shuffle_false_is_contiguous(self, multi_handlers):
+        handlers = multi_handlers
+        ds = SAMDataset(handlers)
+        ds.train_test_split(test_size=0.5, shuffle=False)
+        # unshuffled tail: cube ids are monotone (no interleaving)
+        test_ids = ds.spatial["idx"][ds.test_indices]
+        assert np.all(np.diff(test_ids) >= 0)
+
+    def test_train_test_split_shuffle_true_interleaves(self, multi_handlers):
+        handlers = multi_handlers
+        ds = SAMDataset(handlers)
+        ds.train_test_split(test_size=0.5, shuffle=True, random_state=42)
+        test_ids = ds.spatial["idx"][ds.test_indices]
+        assert len(np.unique(test_ids)) > 1
+        assert np.any(np.diff(test_ids) < 0)
+
+    def test_stratified_train_test_split_interleaves(self, multi_handlers):
+        handlers = multi_handlers
+        ds = SAMDataset(handlers)
+        ds.stratified_train_test_split(test_size=0.5, random_state=42)
+        test_ids = ds.spatial["idx"][ds.test_indices]
+        assert len(np.unique(test_ids)) > 1
+        assert np.any(np.diff(test_ids) < 0)
+
+    def test_stratified_split_by_cube_reproducible(self, multi_handlers):
+        handlers = multi_handlers
+        ds = SAMDataset(handlers)
+        ds.stratified_split_by_cube(test_size=0.2, random_state=42)
+        tr1, te1 = ds.train_indices.copy(), ds.test_indices.copy()
+        ds.stratified_split_by_cube(test_size=0.2, random_state=42)
+        np.testing.assert_array_equal(tr1, ds.train_indices)
+        np.testing.assert_array_equal(te1, ds.test_indices)
+        ds.stratified_split_by_cube(test_size=0.2, random_state=7)
+        assert not np.array_equal(te1, ds.test_indices)
+
+    def test_stratified_split_by_cube_per_cube_ratio(self, multi_handlers):
+        handlers = multi_handlers
+        ds = SAMDataset(handlers)
+        ds.stratified_split_by_cube(test_size=0.2, random_state=42)
+        idx = ds.spatial["idx"]
+        for ci in np.unique(idx):
+            n_cube = np.sum(idx == ci)
+            n_te = np.sum(idx[ds.test_indices] == ci)
+            n_tr = np.sum(idx[ds.train_indices] == ci)
+            assert n_te == max(1, int(n_cube * 0.2))
+            assert n_te + n_tr == n_cube
+        assert len(np.intersect1d(ds.train_indices, ds.test_indices)) == 0
+        assert len(ds.train_indices) + len(ds.test_indices) == len(ds)
+
+    def test_stratified_split_by_cube_interleaves_cubes(self, multi_handlers):
+        """Regression: the final shuffle must not be lost.  train_indices /
+        test_indices are copy-returning properties, so an in-place
+        ``rng.shuffle(self.test_indices)`` silently no-ops and would leave
+        the test set cube-blocked (monotone cube ids)."""
+        handlers = multi_handlers
+        ds = SAMDataset(handlers)
+        ds.stratified_split_by_cube(test_size=0.2, random_state=42)
+        test_ids = ds.spatial["idx"][ds.test_indices]
+        assert len(np.unique(test_ids)) > 1
+        assert np.any(np.diff(test_ids) < 0)  # interleaved, not cube-blocked
+
+    @needs_h5samd
+    def test_stratified_split_by_cube_real_data_spans_cubes(self):
+        ds = SAMDataset.load(H5SAMD_PATH)
+        ds.stratified_split_by_cube(test_size=0.2, random_state=42)
+        test_ids = ds.spatial["idx"][ds.test_indices]
+        assert len(np.unique(test_ids)) == len(ds.cube_shapes)
+        assert np.any(np.diff(test_ids) < 0)  # not cube-blocked
+
+    def test_split_indices_are_snapshots(self, multi_handlers):
+        """In-place mutation of the returned index arrays must not corrupt
+        the stored split (the properties return independent copies)."""
+        handlers = multi_handlers
+        ds = SAMDataset(handlers)
+        ds.train_test_split(test_size=0.5, shuffle=False)
+        stored_tr = ds.train_indices.copy()
+        stored_te = ds.test_indices.copy()
+        np.random.shuffle(ds.train_indices)
+        np.random.shuffle(ds.test_indices)
+        np.testing.assert_array_equal(ds.train_indices, stored_tr)
+        np.testing.assert_array_equal(ds.test_indices, stored_te)
+
+    def test_shuffled_flag_train_test_split(self, multi_handlers):
+        handlers = multi_handlers
+        ds = SAMDataset(handlers)
+        ds.train_test_split(test_size=0.5, shuffle=True, random_state=42)
+        assert ds.shuffled is True
+        ds.train_test_split(test_size=0.5, shuffle=False)
+        assert ds.shuffled is False
+
+    def test_shuffled_flag_stratified_train_test(self, multi_handlers):
+        handlers = multi_handlers
+        ds = SAMDataset(handlers)
+        ds.stratified_train_test_split(test_size=0.5, random_state=42)
+        assert ds.shuffled is True
+
+    def test_shuffled_flag_stratified_by_cube(self, multi_handlers):
+        handlers = multi_handlers
+        ds = SAMDataset(handlers, unsupervised=True)
+        ds.stratified_split_by_cube(test_size=0.2, random_state=42)
+        assert ds.shuffled is True
+
+    def test_shuffled_flag_split_by_label(self, labeled_handler):
+        handlers = labeled_handler
+        ds = SAMDataset(handlers)
+        assert ds.shuffled is False
+        ds.split_by_label("Defect_A")
+        assert ds.shuffled is False
+        ds.split_by_label("Defect_A", test_size=0.5)
+        assert ds.shuffled is True
+
+    def test_shuffled_flag_preserved_by_copy(self, multi_handlers):
+        handlers = multi_handlers
+        ds = SAMDataset(handlers, unsupervised=True)
+        ds.stratified_split_by_cube(test_size=0.2, random_state=42)
+        assert ds.shuffled is True
+        assert ds.copy().shuffled is True
+
+    @needs_h5samd
+    def test_shuffled_flag_reset_on_load(self):
+        ds = SAMDataset.load(H5SAMD_PATH)
+        assert ds.shuffled is False
+
 
 # ── batches ──────────────────────────────────────────────────────────────────
 
@@ -791,11 +914,12 @@ class TestStratifiedSplitByCube:
         assert len(np.intersect1d(ds.train_indices, ds.test_indices)) == 0
         assert len(ds.train_indices) + len(ds.test_indices) == len(ds)
 
-    def test_shuffled_flag_false(self, multi_handlers):
+    def test_shuffled_flag_true_after_cube_split(self, multi_handlers):
         handlers = multi_handlers
         ds = SAMDataset(handlers, unsupervised=True)
-        ds.stratified_split_by_cube(test_size=0.2, random_state=42)
         assert ds.shuffled is False
+        ds.stratified_split_by_cube(test_size=0.2, random_state=42)
+        assert ds.shuffled is True
 
     def test_reproducible_with_seed(self, multi_handlers):
         handlers = multi_handlers
