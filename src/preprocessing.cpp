@@ -147,7 +147,9 @@ array2d<float> savgol_filter_impl(const array2d<float>& data,
 
 array2d<float> lp(const array2d<float>& data, double cutoff, double fs) {
     validate_rows(data);
-    const auto [b, a] = signal::butter_lowpass(cutoff, fs);
+    const auto filter = signal::butter_lowpass(cutoff, fs);
+    const auto& b = filter.first;
+    const auto& a = filter.second;
     array2d<float> out(data.rows(), data.cols());
 #ifdef SAMCORE_HAS_OPENMP
 #pragma omp parallel for if (data.rows() > 8)
@@ -164,7 +166,9 @@ array2d<float> lp(const array2d<float>& data, double cutoff, double fs) {
 array2d<float> bp(const array2d<float>& data, double cutoff_low,
                   double cutoff_high, double fs) {
     validate_rows(data);
-    const auto [b, a] = signal::butter_bandpass(cutoff_low, cutoff_high, fs);
+    const auto filter = signal::butter_bandpass(cutoff_low, cutoff_high, fs);
+    const auto& b = filter.first;
+    const auto& a = filter.second;
     array2d<float> out(data.rows(), data.cols());
 #ifdef SAMCORE_HAS_OPENMP
 #pragma omp parallel for if (data.rows() > 8)

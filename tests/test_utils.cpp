@@ -111,6 +111,8 @@ TEST(utils, KurtConstantRowIsNan) {
     auto k = kurt(d);
     std::uint64_t bits;
     std::memcpy(&bits, &k[0], sizeof(bits));
-    EXPECT_EQ(bits, 0x7ff8000000000000ull); // canonical quiet NaN
+    // Quiet NaN with the sign bit masked out: -ffast-math makes std::isnan
+    // always return false, and the sign of the NaN varies by compiler.
+    EXPECT_EQ(bits & 0x7fffffffffffffffull, 0x7ff8000000000000ull);
     EXPECT_NEAR(k[1], 1.7905882352941176, 1e-12);
 }
