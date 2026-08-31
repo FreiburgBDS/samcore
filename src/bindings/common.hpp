@@ -22,6 +22,8 @@
 #include <nanobind/stl/variant.h>
 #include <nanobind/stl/vector.h>
 
+#include <cstring>
+
 #include <samcore/samcore.hpp>
 
 namespace nb = nanobind;
@@ -85,48 +87,20 @@ std::vector<T> copy_in(nb::ndarray<const T, nb::numpy, nb::ndim<1>, nb::c_contig
 
 // misc helpers
 
+// JSON (de)serialization is delegated to Python's stdlib `json` module so
+// that libsamcore has no JSON support of its own.  `sort_keys` + compact
+// separators reproduce the previous JSON dump: lexicographically sorted
+// keys, no whitespace.
 
-// nlohmann::json -> Python object
-inline nb::object json_to_py(const nlohmann::json& j) {
-    if (j.is_null()) return nb::none();
-    if (j.is_boolean()) return nb::cast(j.get<bool>());
-    if (j.is_number_integer() || j.is_number_unsigned()) {
-        return nb::cast(j.get<std::int64_t>());
-    }
-    if (j.is_number_float()) return nb::cast(j.get<double>());
-    if (j.is_string()) return nb::cast(j.get<std::string>());
-    if (j.is_array()) {
-        nb::list out;
-        for (const auto& v : j) out.append(json_to_py(v));
-        return out;
-    }
-    nb::dict out;
-    for (auto it = j.begin(); it != j.end(); ++it) {
-        out[it.key().c_str()] = json_to_py(it.value());
-    }
-    return out;
+inline nb::object py_json_dumps(nb::handle obj) {
+    nb::object json = nb::module_::import_("json");
+    return json.attr("dumps")(obj, nb::arg("sort_keys") = true,
+                              nb::arg("separators") = nb::make_tuple(",", ":"));
 }
 
-// Python object -> nlohmann::json (best effort, scalar values only)
-inline nlohmann::json py_to_json(nb::handle h) {
-    if (h.is_none()) return nullptr;
-    if (nb::isinstance<nb::bool_>(h)) return nb::cast<bool>(h);
-    if (nb::isinstance<nb::int_>(h)) return nb::cast<std::int64_t>(h);
-    if (nb::isinstance<nb::float_>(h)) return nb::cast<double>(h);
-    if (nb::isinstance<nb::str>(h)) return nb::cast<std::string>(h);
-    if (nb::isinstance<nb::list>(h)) {
-        nlohmann::json arr = nlohmann::json::array();
-        for (auto item : nb::cast<nb::list>(h)) arr.push_back(py_to_json(item));
-        return arr;
-    }
-    if (nb::isinstance<nb::dict>(h)) {
-        nlohmann::json obj = nlohmann::json::object();
-        for (auto [k, v] : nb::cast<nb::dict>(h)) {
-            obj[nb::cast<std::string>(k)] = py_to_json(v);
-        }
-        return obj;
-    }
-    throw std::invalid_argument("cannot convert value to JSON");
+inline nb::object py_json_loads(const std::string& s) {
+    nb::object json = nb::module_::import_("json");
+    return json.attr("loads")(s);
 }
 
 // extra_map <-> Python dict
@@ -143,8 +117,9 @@ inline nb::object extra_to_py(const extra_map& extra) {
             const std::string& s = std::get<std::string>(v);
             if (!s.empty() && (s[0] == '[' || s[0] == '{')) {
                 try {
-                    out[k.c_str()] = json_to_py(nlohmann::json::parse(s));
-                } catch (const nlohmann::json::parse_error&) {
+                    out[k.c_str()] = py_json_loads(s);
+                } catch (const nb::python_error&) {
+                    PyErr_Clear();
                     out[k.c_str()] = nb::cast(s);
                 }
             } else {
@@ -169,8 +144,10 @@ inline extra_map py_to_extra(nb::handle h) {
             out[key] = nb::cast<double>(v);
         } else if (nb::isinstance<nb::str>(v)) {
             out[key] = nb::cast<std::string>(v);
+        } else if (nb::isinstance<nb::list>(v) || nb::isinstance<nb::dict>(v)) {
+            out[key] = nb::cast<std::string>(py_json_dumps(v));
         } else {
-            out[key] = py_to_json(v).dump();
+            throw std::invalid_argument("cannot convert value to JSON");
         }
     }
     return out;

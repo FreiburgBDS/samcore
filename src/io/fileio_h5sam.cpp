@@ -1,7 +1,6 @@
 #include <samcore/io/fileio.hpp>
 
 #include <H5Cpp.h>
-#include <nlohmann/json.hpp>
 
 #include <algorithm>
 #include <cstring>
@@ -26,8 +25,34 @@ void require_extension(const std::filesystem::path& path,
                                 path.string());
 }
 
+// Typed coercions over attribute values, mirroring the header parser's
+// behavior (numeric fields accept any scalar; bools are truthy ints).
+
+std::int64_t as_int(const extra_value& v) {
+    if (std::holds_alternative<bool>(v)) return std::get<bool>(v) ? 1 : 0;
+    if (std::holds_alternative<std::int64_t>(v)) return std::get<std::int64_t>(v);
+    if (std::holds_alternative<double>(v)) return static_cast<std::int64_t>(std::get<double>(v));
+    return 0;
+}
+
+double as_double(const extra_value& v) {
+    if (std::holds_alternative<double>(v)) return std::get<double>(v);
+    if (std::holds_alternative<std::int64_t>(v)) return static_cast<double>(std::get<std::int64_t>(v));
+    if (std::holds_alternative<bool>(v)) return std::get<bool>(v) ? 1.0 : 0.0;
+    return 0.0;
+}
+
+bool as_bool(const extra_value& v) {
+    if (std::holds_alternative<bool>(v)) return std::get<bool>(v);
+    return as_int(v) != 0;
+}
+
+const std::string* as_string(const extra_value& v) {
+    return std::get_if<std::string>(&v);
+}
+
 sam_header read_header_group(H5::Group& group) {
-    nlohmann::json j = nlohmann::json::object();
+    sam_header header;
     const int n = group.getNumAttrs();
     for (int i = 0; i < n; ++i) {
         H5::Attribute attr = group.openAttribute(static_cast<unsigned>(i));
@@ -36,9 +61,38 @@ sam_header read_header_group(H5::Group& group) {
             name == "version") {
             continue; // backwards compat: ignore legacy fields
         }
-        j[name] = read_scalar_attr(attr);
+        extra_value v = read_scalar_attr(attr);
+        if (name == "scanspline") {
+            header.scanspline = as_int(v);
+        } else if (name == "nlines") {
+            header.nlines = as_int(v);
+        } else if (name == "scanlen") {
+            header.scanlen = as_int(v);
+        } else if (name == "samplerate") {
+            header.samplerate = as_double(v);
+        } else if (name == "tzero") {
+            header.tzero = as_int(v);
+        } else if (name == "resolution") {
+            header.resolution = as_double(v);
+        } else if (name == "interpolated") {
+            header.interpolated = as_bool(v);
+        } else if (name == "quality") {
+            header.quality = as_bool(v);
+        } else if (name == "mode") {
+            if (const auto* s = as_string(v)) header.mode = *s;
+        } else if (name == "transducer_in") {
+            if (const auto* s = as_string(v)) header.transducer_in = *s;
+        } else if (name == "transducer_through") {
+            if (const auto* s = as_string(v)) header.transducer_through = *s;
+        } else if (name == "cellid") {
+            if (const auto* s = as_string(v)) header.cellid = *s;
+        } else if (name == "downsample_factor") {
+            header.downsample_factor = as_int(v);
+        } else {
+            header.extra[name] = std::move(v);
+        }
     }
-    return sam_header::from_json(j);
+    return header;
 }
 
 void write_header_group(H5::Group& group, const sam_header& header) {

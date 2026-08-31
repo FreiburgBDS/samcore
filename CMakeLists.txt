@@ -59,7 +59,6 @@ target_include_directories(samcore
 target_link_libraries(samcore
   PUBLIC
     HDF5::HDF5
-    nlohmann_json::nlohmann_json
   PRIVATE
     # OpenMP is an implementation detail: apply it only in the build tree
     # so the exported package does not reference OpenMP::OpenMP_CXX.

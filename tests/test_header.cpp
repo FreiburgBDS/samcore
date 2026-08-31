@@ -18,40 +18,6 @@ TEST(sam_header, ConstructorAndDefaults) {
     EXPECT_TRUE(h.extra.empty());
 }
 
-TEST(sam_header, JsonRoundTrip) {
-    sam_header h(64, 32, 512, 250.0, 42, 2.0, true, false,
-                 "echo", "in", "through", "cell-1", 2,
-                 {{"gain", 3.5}, {"notes", "[\"a\", 1]"}});
-    auto j = h.to_json();
-    auto h2 = sam_header::from_json(j);
-    EXPECT_EQ(h2, h);
-}
-
-TEST(sam_header, JsonParsesBoolsAndInts) {
-    auto j = nlohmann::json{{"version", "x"},  {"scanspline", 10},
-                            {"nlines", 20},   {"scanlen", 100},
-                            {"samplerate", 50}, {"tzero", 7},
-                            {"resolution", 1.0}, {"interpolated", 1},
-                            {"quality", 0}};
-    auto h = sam_header::from_json(j);
-    EXPECT_TRUE(h.interpolated);
-    EXPECT_FALSE(h.quality);
-}
-
-TEST(sam_header, IgnoresLegacyKeys) {
-    auto j = nlohmann::json{{"version", "x"},
-                            {"scanspline", 1},
-                            {"nlines", 1},
-                            {"scanlen", 10},
-                            {"samplerate", 1},
-                            {"tzero", 0},
-                            {"resolution", 1},
-                            {"headerlen", 12345},
-                            {"bytes_p_sample", 1}};
-    auto h = sam_header::from_json(j);
-    EXPECT_EQ(h.extra.count("headerlen"), 0);
-}
-
 TEST(sam_header, TimeAxis) {
     sam_header h(1, 1, 4, 1000.0, 100, 1.0);
     // linspace(tzero, tzero + scanlen/samplerate*1e3, scanlen)
@@ -83,12 +49,18 @@ TEST(sam_header, HashStable) {
     EXPECT_EQ(a.hash(), b.hash());
 }
 
-TEST(sam_header, ExtraJsonStringRoundTrip) {
-    sam_header h(1, 1, 10, 1, 0, 1);
-    h.extra["array_meta"] = std::string("{\"x\": [1, 2]}");
-    auto j = h.to_json();
-    EXPECT_TRUE(j["array_meta"].is_string());
-    auto h2 = sam_header::from_json(j);
-    EXPECT_EQ(std::get<std::string>(h2.extra.at("array_meta")),
-              "{\"x\": [1, 2]}");
+TEST(sam_header, HashDistinguishesFields) {
+    sam_header a(1, 1, 10, 1, 0, 1);
+    sam_header b = a;
+    b.nlines = 2;
+    EXPECT_NE(a.hash(), b.hash());
+}
+
+TEST(sam_header, HashIncludesExtra) {
+    sam_header a(1, 1, 10, 1, 0, 1);
+    sam_header b = a;
+    a.extra["gain"] = std::int64_t{3};
+    EXPECT_NE(a.hash(), b.hash());
+    sam_header c = a;
+    EXPECT_EQ(a.hash(), c.hash());
 }

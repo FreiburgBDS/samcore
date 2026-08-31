@@ -21,7 +21,6 @@ pkgs.stdenv.mkDerivation {
 
   buildInputs = with pkgs; [
     hdf5
-    nlohmann_json
     gtest
   ];
 

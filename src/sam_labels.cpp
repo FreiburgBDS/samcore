@@ -334,24 +334,6 @@ sam_labels sam_labels::create_unlabeled(size_t num_signals) {
                       {label_name_healthy});
 }
 
-nlohmann::json sam_labels::to_dict() const {
-    return nlohmann::json{{"labels", labels_}, {"label_names", label_names_}};
-}
-
-sam_labels sam_labels::from_dict(const nlohmann::json& d) {
-    std::vector<std::string> names;
-    if (d.contains("label_names") && d["label_names"].is_array()) {
-        for (const auto& v : d["label_names"]) names.push_back(v.get<std::string>());
-    } else {
-        names = {label_name_healthy};
-    }
-    std::vector<std::int8_t> labels;
-    if (d.contains("labels") && d["labels"].is_array()) {
-        for (const auto& v : d["labels"]) labels.push_back(v.get<std::int8_t>());
-    }
-    return sam_labels(std::move(labels), std::move(names));
-}
-
 sam_labels merge_labels(const std::vector<sam_labels>& instances) {
     if (instances.size() < 2) {
         throw std::invalid_argument(

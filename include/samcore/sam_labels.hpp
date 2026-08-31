@@ -2,7 +2,6 @@
 
 #include <cstdint>
 #include <map>
-#include <nlohmann/json.hpp>
 #include <optional>
 #include <string>
 #include <utility>
@@ -102,9 +101,6 @@ public:
     [[nodiscard]] sam_labels take(const std::vector<size_t>& indices) const;
 
     static sam_labels create_unlabeled(size_t num_signals);
-
-    [[nodiscard]] nlohmann::json to_dict() const;
-    static sam_labels from_dict(const nlohmann::json& d);
 
 private:
     std::vector<std::int8_t> labels_;

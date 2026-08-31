@@ -6,10 +6,13 @@
 #include <H5Cpp.h>
 
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <stdexcept>
 #include <string>
 #include <vector>
+
+#include <samcore/sam_header.hpp>
 
 namespace samcore::io::detail {
 
@@ -50,10 +53,11 @@ namespace samcore::io::detail {
     return std::string(begin, end);
 }
 
-// Read an integer/float/bool attribute into a JSON value.  h5py stores
-// Python bools as HDF5 enums; reading them as integers works via HDF5
-// type conversion.
-[[nodiscard]] inline nlohmann::json read_scalar_attr(H5::Attribute& attr) {
+// Read an integer/float/bool/string attribute into a typed extra value.
+// h5py stores Python bools as HDF5 enums; reading them as integers works
+// via HDF5 type conversion, so bools arrive as int64 (matching the
+// pre-existing behavior).
+[[nodiscard]] inline extra_value read_scalar_attr(H5::Attribute& attr) {
     H5::DataType t = attr.getDataType();
     const H5T_class_t cls = t.getClass();
     if (cls == H5T_STRING) {

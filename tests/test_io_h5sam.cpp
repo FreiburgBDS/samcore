@@ -118,6 +118,28 @@ TEST(io_h5sam, WriteThenReadBackFromScratch) {
     std::filesystem::remove(out);
 }
 
+TEST(io_h5sam, ExtraAttrsRoundTrip) {
+    samcore::sam_header header(4, 3, 128, 50.0, 10, 2.5);
+    header.extra["gain"] = std::int64_t{3};
+    header.extra["gain_db"] = 6.5;
+    header.extra["calibrated"] = std::string("[true, false]");
+    samcore::array2d<std::int8_t> data(12, 128);
+    for (size_t i = 0; i < data.rows(); ++i) {
+        for (size_t j = 0; j < data.cols(); ++j) {
+            data[i][j] = static_cast<std::int8_t>((i + j) % 100 - 50);
+        }
+    }
+    auto scan = samcore::sam_scan::from_data(data, header);
+    const std::filesystem::path out = tmp_file("samcore_extra_attrs.h5sam");
+    scan.to_h5sam(out);
+    auto loaded = samcore::sam_scan::from_file(out);
+    EXPECT_EQ(std::get<std::int64_t>(loaded.header().extra.at("gain")), 3);
+    EXPECT_DOUBLE_EQ(std::get<double>(loaded.header().extra.at("gain_db")), 6.5);
+    EXPECT_EQ(std::get<std::string>(loaded.header().extra.at("calibrated")),
+              "[true, false]");
+    std::filesystem::remove(out);
+}
+
 TEST(io_h5sam, PartialRowRead) {
     if (!std::filesystem::exists(h5sam_path())) GTEST_SKIP() << "no h5sam testdata";
     auto h = sam_scan::from_file(h5sam_path());

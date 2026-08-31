@@ -2,6 +2,46 @@
 
 #include "common.hpp"
 
+namespace {
+
+// Flat dict of the fixed fields plus the raw `extra` map (non-scalar extra
+// values are kept as their pre-serialized JSON strings, matching the
+// JSON representation of a header).
+nb::object header_to_dict(const sam_header& h) {
+    nb::dict d;
+    d["scanspline"] = h.scanspline;
+    d["nlines"] = h.nlines;
+    d["interpolated"] = h.interpolated;
+    d["scanlen"] = h.scanlen;
+    d["samplerate"] = h.samplerate;
+    d["tzero"] = h.tzero;
+    d["quality"] = h.quality;
+    d["resolution"] = h.resolution;
+    d["mode"] = h.mode;
+    d["transducer_in"] = h.transducer_in;
+    d["transducer_through"] = h.transducer_through;
+    d["cellid"] = h.cellid;
+    d["downsample_factor"] = h.downsample_factor;
+    for (const auto& [k, v] : h.extra) {
+        if (std::holds_alternative<std::int64_t>(v)) {
+            d[k.c_str()] = nb::cast(std::get<std::int64_t>(v));
+        } else if (std::holds_alternative<double>(v)) {
+            d[k.c_str()] = nb::cast(std::get<double>(v));
+        } else if (std::holds_alternative<bool>(v)) {
+            d[k.c_str()] = nb::cast(std::get<bool>(v));
+        } else {
+            d[k.c_str()] = nb::cast(std::get<std::string>(v));
+        }
+    }
+    return d;
+}
+
+std::string header_json_str(const sam_header& h) {
+    return nb::cast<std::string>(py_json_dumps(header_to_dict(h)));
+}
+
+} // namespace
+
 void bind_header(nb::module_& m) {
     // SAMHeader
 
@@ -96,15 +136,15 @@ void bind_header(nb::module_& m) {
                      [](sam_header& h) { return extra_to_py(h.extra); },
                      [](sam_header& h, nb::object v) { h.extra = py_to_extra(v); },
                      "Additional metadata as a dict.")
-        .def("to_json", [](const sam_header& h) { return json_to_py(h.to_json()); },
+        .def("to_json", [](const sam_header& h) { return header_to_dict(h); },
              "Serialize the header to a JSON-compatible dict.")
-        .def("json_str", &sam_header::json_str,
+        .def("json_str", [](const sam_header& h) { return header_json_str(h); },
              "Serialize the header to a JSON string.")
         .def("time", &sam_header::time, nb::arg("start") = 0, nb::arg("end") = -1,
              "Time axis in ns for samples ``start..end``.")
         .def("copy", [](const sam_header& h) { return h; },
              "Return a copy of the header.")
-        .def("__str__", [](const sam_header& h) { return h.json_str(); },
+        .def("__str__", [](const sam_header& h) { return header_json_str(h); },
              "JSON string representation of the header.")
         .def("__hash__", &sam_header::hash,
              "Stable hash of the header.")

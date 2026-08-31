@@ -2,7 +2,6 @@
 
 #include <cstdint>
 #include <map>
-#include <nlohmann/json.hpp>
 #include <string>
 #include <variant>
 #include <vector>
@@ -28,15 +27,6 @@ public:
                std::string cellid = {}, std::int64_t downsample_factor = 1,
                extra_map extra = {});
 
-    // Build from a flat JSON object (attribute name -> value).  String
-    // values that look like JSON (start with '[' or '{') are parsed and
-    // stored as JSON strings in `extra`.
-    static sam_header from_json(const nlohmann::json& j);
-
-    // Serialize to a flat JSON object.
-    [[nodiscard]] nlohmann::json to_json() const;
-    [[nodiscard]] std::string json_str() const;
-
     // Time axis in nanoseconds for the given sample range (linspace
     // semantics: start and end inclusive, num = end - start).
     [[nodiscard]] std::vector<double> time(std::int64_t start = 0,
@@ -45,8 +35,8 @@ public:
     [[nodiscard]] bool operator==(const sam_header& o) const;
     [[nodiscard]] bool operator!=(const sam_header& o) const { return !(*this == o); }
 
-    // Hash of the JSON representation.  NOTE: not byte-identical to
-    // an md5-based hash; hash values are never persisted.
+    // Deterministic content hash (equal headers hash equal).  NOTE: not
+    // byte-identical to a JSON-based hash; hash values are never persisted.
     [[nodiscard]] size_t hash() const;
 
     std::int64_t scanspline = 0;

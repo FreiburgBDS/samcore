@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <numeric>
 #include <stdexcept>
 

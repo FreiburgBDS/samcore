@@ -131,10 +131,24 @@ void bind_labels(nb::module_& m) {
         .def_static("create_unlabeled", &sam_labels::create_unlabeled,
                     nb::arg("num_signals"),
                     "Create ``num_signals`` unlabeled (-1) labels.")
-        .def("to_dict", [](const sam_labels& l) { return json_to_py(l.to_dict()); },
-             "Serialize the labels to a dict.")
-        .def_static("from_dict", [](nb::object d) {
-            return sam_labels::from_dict(py_to_json(d));
+        .def("to_dict", [](const sam_labels& l) {
+            nb::dict d;
+            d["labels"] = l.labels();
+            d["label_names"] = l.label_names();
+            return d;
+        },
+         "Serialize the labels to a dict.")
+        .def_static("from_dict", [](nb::object data) {
+            nb::dict d = nb::cast<nb::dict>(data);
+            std::vector<std::string> names = {sam_labels::label_name_healthy};
+            if (d.contains("label_names") && nb::isinstance<nb::list>(d["label_names"])) {
+                names = nb::cast<std::vector<std::string>>(d["label_names"]);
+            }
+            std::vector<std::int8_t> labels;
+            if (d.contains("labels") && nb::isinstance<nb::list>(d["labels"])) {
+                labels = nb::cast<std::vector<std::int8_t>>(d["labels"]);
+            }
+            return sam_labels(std::move(labels), std::move(names));
         }, nb::arg("data"),
            "Recreate labels from a ``to_dict`` dict.");
 

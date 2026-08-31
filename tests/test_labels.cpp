@@ -195,14 +195,6 @@ TEST(sam_labels, CreateUnlabeled) {
     EXPECT_FALSE(l.is_labeled());
 }
 
-TEST(sam_labels, DictRoundTrip) {
-    auto l = make_labels({-1, 0, 1});
-    auto d = l.to_dict();
-    auto l2 = sam_labels::from_dict(d);
-    EXPECT_EQ(l2.labels(), l.labels());
-    EXPECT_EQ(l2.label_names(), l.label_names());
-}
-
 TEST(sam_labels, Copy) {
     auto l = make_labels({-1, 0, 1});
     auto c = l.copy();

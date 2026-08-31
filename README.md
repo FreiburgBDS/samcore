@@ -28,8 +28,6 @@ Requires a C++20 compiler and CMake.  Dependencies:
 
 - **HDF5** (C++ bindings): used for `.h5sam`/`.h5samd` file I/O.  Obtained
   via the nix dev shell, a distro package, or `HDF5_ROOT`.
-- **nlohmann_json**: JSON serialization of headers and labels.  Used when
-  found as a system package, otherwise fetched automatically (header-only).
 - **PocketFFT**: FFT backend, vendored as a git submodule
   (`external/pocketfft`).
 - **nanobind** + **numpy**: build-time dependencies of the Python package
