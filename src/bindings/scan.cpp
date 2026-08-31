@@ -191,35 +191,27 @@ void bind_scan(nb::module_& m) {
          .def("header_hash", [](const sam_scan& s) { return s.header_hash(); },
               "Stable hash of the header.")
          .def("image", [](sam_scan& s, const std::string& mode) {
-             image_mode m;
              if (mode == "max") {
-                 m = image_mode::max;
-             } else if (mode == "absmax") {
-                 m = image_mode::absmax;
-             } else if (mode == "power") {
-                 m = image_mode::power;
-             } else {
-                 throw std::invalid_argument("Unsupported image type: " + mode);
+                 return to_numpy(s.image_max());
              }
-             image_result r = s.image(m);
-             if (std::holds_alternative<array2d<std::int8_t>>(r)) {
-                 return to_numpy(std::move(std::get<array2d<std::int8_t>>(r)));
+             if (mode == "absmax") {
+                 return to_numpy(s.image_absmax());
              }
-             if (std::holds_alternative<array2d<std::int16_t>>(r)) {
-                 return to_numpy(std::move(std::get<array2d<std::int16_t>>(r)));
+             if (mode == "power") {
+                 return to_numpy(s.image_power());
              }
-             return to_numpy(std::move(std::get<array2d<float>>(r)));
+             throw std::invalid_argument("Unsupported image type: " + mode);
          }, nb::arg("mode"),
             nb::sig(
-                "def image(self, mode: str) -> numpy.typing.NDArray[numpy.float32] | numpy.typing.NDArray[numpy.int16] | numpy.typing.NDArray[numpy.int8]"),
+                "def image(self, mode: str) -> numpy.typing.NDArray[numpy.float32] | numpy.typing.NDArray[numpy.int8]"),
             "Reduce every A-scan to a single value and reshape the result "
                     "into a C-scan image of shape (nlines, cols).\n\n"
                     "``mode`` selects the reduction:\n"
                     "  - 'max'    - maximum sample value of each scan\n"
                     "  - 'absmax' - maximum absolute sample value of each scan\n"
                     "  - 'power'  - sum of squared samples (signal energy)\n\n"
-                    "Returns an image with dtype int8 ('max'), int16 "
-                    "('absmax') or float32 ('power').")
+                    "Returns an image with dtype int8 ('max' and 'absmax'; "
+                    "absmax saturates abs(-128) to 127) or float32 ('power').")
          .def("normalized_data", [](sam_scan& s) {
              return to_numpy(s.normalized_data());
          }, nb::sig(

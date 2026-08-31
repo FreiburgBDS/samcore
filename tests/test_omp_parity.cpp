@@ -40,7 +40,7 @@ sam_scan make_scan(std::int64_t nlines, std::int64_t cols,
 
 TEST(omp_parity, ImagePower) {
     auto h = make_scan(16, 16, 512);
-    auto img = std::get<array2d<float>>(h.image(image_mode::power));
+    auto img = h.image_power();
     // img is (nlines, cols); scan s sits at img[s / nc][s % nc].
     const size_t nc = static_cast<size_t>(h.cols());
     for (size_t s = 0; s < h.data().rows(); ++s) {

@@ -172,50 +172,65 @@ std::vector<double> sam_scan::time(std::optional<size_t> index) const {
     return header_.time();
 }
 
-image_result sam_scan::image(image_mode mode) const {
-    // Every scan reduces to a single value, reshaped to (nlines, cols).
-    ensure_loaded();
-    const size_t nl = static_cast<size_t>(header_.nlines);
-    const size_t nc = static_cast<size_t>(header_.scanspline);
-    const size_t n = data_.rows();
-    if (mode == image_mode::max) {
-        array2d<std::int8_t> img(nl, nc);
-#ifdef SAMCORE_HAS_OPENMP
-#pragma omp parallel for if (n > 8)
-#endif
-        for (size_t i = 0; i < n; ++i) {
-            img[i / nc][i % nc] =
-                *std::max_element(data_[i].begin(), data_[i].end());
-        }
-        return img;
-    }
-    if (mode == image_mode::absmax) {
-        array2d<std::int16_t> img(nl, nc);
-#ifdef SAMCORE_HAS_OPENMP
-#pragma omp parallel for if (n > 8)
-#endif
-        for (size_t i = 0; i < n; ++i) {
-            const auto row = data_[i];
-            std::int16_t mx = row[0], mn = row[0];
-            for (auto v : row) {
-                mx = std::max(mx, static_cast<std::int16_t>(v));
-                mn = std::min(mn, static_cast<std::int16_t>(v));
-            }
-            img[i / nc][i % nc] = std::max(mx, static_cast<std::int16_t>(-mn));
-        }
-        return img;
-    }
-    // power: sum of squares, float32
-    array2d<float> img(nl, nc);
+namespace {
+
+// Reduce every scan to a single value and reshape to (nlines, cols).
+template <typename T, typename F>
+array2d<T> reduce_image(const array2d<std::int8_t>& data, size_t nlines,
+                        size_t ncols, const F& reduce) {
+    const size_t n = data.rows();
+    array2d<T> img(nlines, ncols);
 #ifdef SAMCORE_HAS_OPENMP
 #pragma omp parallel for if (n > 8)
 #endif
     for (size_t i = 0; i < n; ++i) {
-        double acc = 0.0;
-        for (auto v : data_[i]) acc += static_cast<double>(v) * v;
-        img[i / nc][i % nc] = static_cast<float>(acc);
+        img[i / ncols][i % ncols] = reduce(data[i]);
     }
     return img;
+}
+
+} // namespace
+
+array2d<std::int8_t> sam_scan::image_max() const {
+    ensure_loaded();
+    return reduce_image<std::int8_t>(
+        data_, static_cast<size_t>(header_.nlines),
+        static_cast<size_t>(header_.scanspline),
+        [](std::span<const std::int8_t> row) {
+            return *std::max_element(row.begin(), row.end());
+        });
+}
+
+array2d<std::int8_t> sam_scan::image_absmax() const {
+    ensure_loaded();
+    // absmax = max(|min|, |max|), saturated to int8 (abs(-128) -> 127) so
+    // the result stays in the same 8-bit domain as the input.
+    return reduce_image<std::int8_t>(
+        data_, static_cast<size_t>(header_.nlines),
+        static_cast<size_t>(header_.scanspline),
+        [](std::span<const std::int8_t> row) {
+            std::int8_t mx = row[0], mn = row[0];
+            for (auto v : row) {
+                mx = std::max(mx, v);
+                mn = std::min(mn, v);
+            }
+            const int am = std::max(std::abs(static_cast<int>(mx)),
+                                    std::abs(static_cast<int>(mn)));
+            return static_cast<std::int8_t>(std::min(am, 127));
+        });
+}
+
+array2d<float> sam_scan::image_power() const {
+    ensure_loaded();
+    // power: sum of squares, float32
+    return reduce_image<float>(
+        data_, static_cast<size_t>(header_.nlines),
+        static_cast<size_t>(header_.scanspline),
+        [](std::span<const std::int8_t> row) {
+            double acc = 0.0;
+            for (auto v : row) acc += static_cast<double>(v) * v;
+            return static_cast<float>(acc);
+        });
 }
 
 array2d<float> sam_scan::normalized_data() const {

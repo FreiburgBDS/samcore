@@ -45,8 +45,10 @@ def test_image(h5):
 
     img_absmax = h5.image("absmax")
     assert img_absmax.shape == (h5.nlines, h5.cols)
+    # C++ saturates abs(-128) to 127 to stay in int8
     np.testing.assert_array_equal(
-        img_absmax.ravel(), np.abs(h5.data.astype(np.int64)).max(axis=-1))
+        img_absmax.ravel(),
+        np.minimum(np.abs(h5.data.astype(np.int64)).max(axis=-1), 127))
 
     img_power = h5.image("power")
     assert img_power.shape == (h5.nlines, h5.cols)

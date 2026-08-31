@@ -83,7 +83,7 @@ TEST(sam_scan, ImageModes) {
     }
     auto h = sam_scan::from_data(data, header);
 
-    auto mx = std::get<array2d<std::int8_t>>(h.image(image_mode::max));
+    auto mx = h.image_max();
     EXPECT_EQ(mx.rows(), 2);
     EXPECT_EQ(mx.cols(), 2);
     EXPECT_EQ(mx[0][0], 4);
@@ -91,17 +91,28 @@ TEST(sam_scan, ImageModes) {
     EXPECT_EQ(mx[1][0], 5);
     EXPECT_EQ(mx[1][1], 0);
 
-    auto am = std::get<array2d<std::int16_t>>(h.image(image_mode::absmax));
+    auto am = h.image_absmax();
     EXPECT_EQ(am[0][0], 4);
     EXPECT_EQ(am[0][1], 4);
     EXPECT_EQ(am[1][0], 5);
     EXPECT_EQ(am[1][1], 0);
 
-    auto pw = std::get<array2d<float>>(h.image(image_mode::power));
+    auto pw = h.image_power();
     EXPECT_FLOAT_EQ(pw[0][0], 30.0f);
     EXPECT_FLOAT_EQ(pw[0][1], 30.0f);
     EXPECT_FLOAT_EQ(pw[1][0], 100.0f);
     EXPECT_FLOAT_EQ(pw[1][1], 0.0f);
+}
+
+TEST(sam_scan, ImageAbsmaxSaturates) {
+    sam_header header(1, 1, 3, 100.0, 0, 1.0);
+    array2d<std::int8_t> data(1, 3);
+    data[0][0] = -128;
+    data[0][1] = 5;
+    data[0][2] = 0;
+    auto h = sam_scan::from_data(std::move(data), header);
+    auto am = h.image_absmax();
+    EXPECT_EQ(am[0][0], 127); // abs(-128) saturates to 127 (int8)
 }
 
 TEST(sam_scan, NormalizedData) {

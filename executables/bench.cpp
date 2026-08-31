@@ -51,7 +51,7 @@ int main(int argc, char** argv) {
 #endif
 
     double t;
-    t = time_ms([&] { auto img = scan.image(image_mode::absmax); (void)img; });
+    t = time_ms([&] { auto img = scan.image_absmax(); (void)img; });
     std::printf("image(absmax)   : %8.2f ms\n", t);
 
     t = time_ms([&] { auto z = scan.zgate(0.5, 500); (void)z; });

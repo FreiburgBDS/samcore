@@ -68,7 +68,7 @@ def test_image_modes():
         img = h.image(mode)
         assert img.shape == h.shape
     assert h.image("max").dtype == np.int8
-    assert h.image("absmax").dtype == np.int16
+    assert h.image("absmax").dtype == np.int8
     assert h.image("power").dtype == np.float32
     with pytest.raises(ValueError):
         h.image("bogus")

@@ -73,7 +73,7 @@ pip install .
 from samcore import SAMScan, SAMDataset
 
 scan = SAMScan("testdata.h5sam")       # .h5sam files
-img = scan.image("absmax")         # (nlines, cols)
+img = scan.image_absmax()         # (nlines, cols)
 
 dataset = SAMDataset([scan])
 dataset.preprocess("lp", cutoff=10.0, fs=2.5e3)
@@ -110,7 +110,8 @@ cmake --build build
 
 int main() {
     auto scan = samcore::sam_scan::from_file("testdata.h5sam"); // .h5sam files
-    auto img = scan.image(samcore::image_mode::absmax);         // (nlines, cols)
+
+    auto img = scan.image_absmax();
 
     samcore::sam_dataset dataset({scan});
     samcore::preprocess_args args;

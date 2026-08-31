@@ -5,7 +5,6 @@
 #include <memory>
 #include <optional>
 #include <span>
-#include <variant>
 #include <vector>
 
 #include <samcore/array.hpp>
@@ -20,15 +19,8 @@ namespace io {
 struct h5sam_lazy_state; // forward declaration (defined in src/io/h5_lazy.hpp)
 }
 
-enum class image_mode { max, absmax, power };
 enum class downsample_mode { decimate, mean, median, sample };
 enum class mirror_axis { x, y };
-
-// Result of image(mode): int8 for 'max',
-// int16 for 'absmax', float32 for 'power').
-using image_result = std::variant<array2d<std::int8_t>,
-                                  array2d<std::int16_t>,
-                                  array2d<float>>;
 
 // Handler for SAM scan data; supports
 // loading from .h5sam files, per-scan
@@ -128,7 +120,11 @@ public:
     // reductions
 
     // Reduce every scan to a single value, reshaped to (nlines, cols).
-    [[nodiscard]] image_result image(image_mode mode) const;
+    // dtypes: int8 ('max', 'absmax'; absmax saturates abs(-128) to 127),
+    // float32 ('power', sum of squared samples).
+    [[nodiscard]] array2d<std::int8_t> image_max() const;
+    [[nodiscard]] array2d<std::int8_t> image_absmax() const;
+    [[nodiscard]] array2d<float> image_power() const;
 
     // Data in [-1, 127/128] as float32.
     [[nodiscard]] array2d<float> normalized_data() const;
