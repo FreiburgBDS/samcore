@@ -105,7 +105,37 @@ void bind_header(nb::module_& m) {
              nb::arg("mode") = "", nb::arg("transducer_in") = "",
              nb::arg("transducer_through") = "", nb::arg("cellid") = "",
              nb::arg("downsample_factor") = 1, nb::arg("extra") = nb::none(),
-             "Create a SAM header.")
+             "Create a SAM header.\n\n"
+                     "Parameters\n"
+                     "----------\n"
+                     "scanspline : int\n"
+                     "    Number of scans per line (grid columns).\n"
+                     "nlines : int\n"
+                     "    Number of scan lines (grid rows).\n"
+                     "scanlen : int\n"
+                     "    Samples per A-scan.\n"
+                     "samplerate : float\n"
+                     "    Sampling rate in MHz.\n"
+                     "tzero : int\n"
+                     "    Time origin in ns.\n"
+                     "resolution : float\n"
+                     "    Lateral resolution in um per pixel.\n"
+                     "interpolated : bool, optional\n"
+                     "    Whether the acquisition was interpolated.\n"
+                     "quality : bool, optional\n"
+                     "    Quality flag of the acquisition.\n"
+                     "mode : str, optional\n"
+                     "    Acquisition mode, 'echo', 'through' or ''.\n"
+                     "transducer_in : str, optional\n"
+                     "    Input transducer.\n"
+                     "transducer_through : str, optional\n"
+                     "    Through transducer.\n"
+                     "cellid : str, optional\n"
+                     "    Cell identifier.\n"
+                     "downsample_factor : int, optional\n"
+                     "    Downsampling factor applied to the acquisition.\n"
+                     "extra : dict, optional\n"
+                     "    Additional metadata as key-value pairs.")
         .def_rw("scanspline", &sam_header::scanspline,
                 "Scans per line (grid columns).")
         .def_rw("nlines", &sam_header::nlines,
@@ -137,11 +167,30 @@ void bind_header(nb::module_& m) {
                      [](sam_header& h, nb::object v) { h.extra = py_to_extra(v); },
                      "Additional metadata as a dict.")
         .def("to_json", [](const sam_header& h) { return header_to_dict(h); },
+             nb::sig("def to_json(self) -> dict[str, object]"),
              "Serialize the header to a JSON-compatible dict.")
         .def("json_str", [](const sam_header& h) { return header_json_str(h); },
              "Serialize the header to a JSON string.")
-        .def("time", &sam_header::time, nb::arg("start") = 0, nb::arg("end") = -1,
-             "Time axis in ns for samples ``start..end``.")
+        .def("time",
+             [](const sam_header& h, std::int64_t start, std::int64_t end) {
+                 return to_numpy(h.time(start, end));
+             },
+             nb::arg("start") = 0, nb::arg("end") = -1,
+             nb::sig(
+                 "def time(self, start: int = 0, end: int = -1) -> numpy.typing.NDArray[numpy.float64]"),
+             "Time axis in ns for samples ``start``..``end``.\n\n"
+                     "Parameters\n"
+                     "----------\n"
+                     "start : int, optional\n"
+                     "    First sample index (inclusive).\n"
+                     "end : int, optional\n"
+                     "    Last sample index (exclusive); -1 means the full "
+                     "scan length.\n\n"
+                     "Returns\n"
+                     "-------\n"
+                     "numpy.ndarray\n"
+                     "    Linearly spaced time indices in ns, "
+                     "``tzero + i / samplerate * 1e3``.")
         .def("copy", [](const sam_header& h) { return h; },
              "Return a copy of the header.")
         .def("__str__", [](const sam_header& h) { return header_json_str(h); },

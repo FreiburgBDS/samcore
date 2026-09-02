@@ -60,3 +60,11 @@ result = "{v}"
 
 [tool.pytest.ini_options]
 testpaths = ["tests/python"]
+
+[tool.mypy]
+# The package is checked against its installed .pyi stubs (generated at
+# build time by nanobind's stubgen), so run `pip install .` first.
+files = ["src/samcore"]
+check_untyped_defs = true
+warn_unused_ignores = true
+warn_redundant_casts = true

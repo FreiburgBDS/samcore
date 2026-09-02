@@ -12,18 +12,47 @@ void bind_scan(nb::module_& m) {
                                  "indices.\n\n"
                                  "``data`` is a zero-copy numpy view of the "
                                  "C++ buffer with shape "
-                                 "(nlines * cols, scanlen).")
+                                 "(nlines * cols, scanlen).\n\n"
+                                 "Attributes\n"
+                                 "----------\n"
+                                 "data : ndarray (int8)\n"
+                                 "    Signal matrix, shape (nlines * cols, "
+                                 "scanlen).\n"
+                                 "header : SAMHeader\n"
+                                 "    Acquisition metadata.\n"
+                                 "samlabels : SAMLabels\n"
+                                 "    Per-scan labels and their names.\n"
+                                 "starts : ndarray (int32) or None\n"
+                                 "    Per-scan start indices; -1 marks an "
+                                 "unaligned scan.\n"
+                                 "path : str\n"
+                                 "    Source file path (empty when built from "
+                                 "data).")
         .def(nb::init<>())
         .def(nb::init<std::string, bool>(),
              nb::arg("path"), nb::arg("mmap") = false,
-             "Load a SAM scan from a .h5sam file.  With mmap=True the "
-                     "signal data stays on disk until first accessed.")
+             "Load a SAM scan from a .h5sam file.\n\n"
+                     "Parameters\n"
+                     "----------\n"
+                     "path : str\n"
+                     "    Path to a .h5sam file.\n"
+                     "mmap : bool, optional\n"
+                     "    With True the signal data stays on disk until first "
+                     "accessed (lazy loading).  In-memory operations require "
+                     "the data to be loaded.")
         .def_static("from_file",
                     [](const std::string& path, bool mmap) {
                         return sam_scan::from_file(path, mmap);
                     },
                     nb::arg("path"), nb::arg("mmap") = false,
-                    "Load a SAM scan from a .h5sam file.")
+                    "Load a SAM scan from a .h5sam file.\n\n"
+                            "Parameters\n"
+                            "----------\n"
+                            "path : str\n"
+                            "    Path to a .h5sam file.\n"
+                            "mmap : bool, optional\n"
+                            "    Keep the signal data on disk until first "
+                            "accessed (lazy loading).")
         .def_static("from_data",
                     [](in_i8_2 data, sam_header header,
                        std::optional<std::vector<std::int32_t>> starts,
@@ -36,9 +65,57 @@ void bind_scan(nb::module_& m) {
                     nb::arg("data"), nb::arg("header"),
                     nb::arg("starts") = nb::none(),
                     nb::arg("samlabels") = nb::none(),
-                    "Build a scan from an int8 signal array (nlines x "
-                            "cols rows, scanlen columns), a header, and "
-                            "optional per-scan starts and labels.")
+                    nb::sig(
+                        "def from_data(data: numpy.typing.NDArray[numpy.int8], header: SAMHeader, starts: numpy.typing.NDArray[numpy.int32] | collections.abc.Sequence[int] | None = None, samlabels: SAMLabels | None = None) -> SAMScan"),
+                    "Build a scan from an int8 signal array and a header.\n\n"
+                            "Parameters\n"
+                            "----------\n"
+                            "data : ndarray (int8)\n"
+                            "    Signals of shape (nlines * cols, scanlen).\n"
+                            "header : SAMHeader\n"
+                            "    Acquisition metadata; ``nlines * scanspline`` "
+                            "must match ``data.shape[0]`` and ``scanlen`` "
+                            "``data.shape[1]``.\n"
+                            "starts : ndarray (int32) or None, optional\n"
+                            "    Per-scan start indices; -1 marks an unaligned "
+                            "scan.\n"
+                            "samlabels : SAMLabels or None, optional\n"
+                            "    Per-scan labels; unlabeled when omitted.")
+        .def_static("handler_from_data",
+                    [](in_i8_2 data, sam_header header,
+                       std::optional<std::vector<std::int32_t>> starts,
+                       std::optional<sam_labels> labels) {
+                        sam_scan s = sam_scan::from_data(
+                            copy_in<std::int8_t>(data), std::move(header),
+                            std::move(starts), std::move(labels));
+                        s.path() = "";
+                        return s;
+                    },
+                    nb::arg("data"), nb::arg("header"),
+                    nb::arg("starts") = nb::none(),
+                    nb::arg("samlabels") = nb::none(),
+                    nb::sig(
+                        "def handler_from_data(data: numpy.typing.NDArray[numpy.int8], header: SAMHeader, starts: numpy.typing.NDArray[numpy.int32] | collections.abc.Sequence[int] | None = None, samlabels: SAMLabels | None = None) -> SAMScan"),
+                    "Create a new scan from data and header, without loading "
+                            "from file.\n\n"
+                            "Parameters\n"
+                            "----------\n"
+                            "data : ndarray (int8)\n"
+                            "    The signal array of shape "
+                            "(nlines * cols, scanlen).\n"
+                            "header : SAMHeader\n"
+                            "    The scan header metadata.\n"
+                            "starts : ndarray (int32) or sequence of int, "
+                            "optional\n"
+                            "    The start indices for each scan, if "
+                            "applicable.\n"
+                            "samlabels : SAMLabels or None, optional\n"
+                            "    Per-scan labels; unlabeled when omitted.\n\n"
+                            "Returns\n"
+                            "-------\n"
+                            "SAMScan\n"
+                            "    A new instance with the provided data and "
+                            "metadata.")
         .def_prop_ro("data", [](sam_scan& s) {
             auto& d = s.data();
             return nb::ndarray<nb::numpy, std::int8_t>(d.data(),
@@ -60,20 +137,38 @@ void bind_scan(nb::module_& m) {
             return s.samlabels().label_names();
         }, "The list of class label names.")
         .def_prop_rw("starts",
-                     [](sam_scan& s) -> nb::object {
+                     [](sam_scan& s)
+                         -> std::optional<nb::ndarray<nb::numpy, std::int32_t>> {
                          const auto& v = s.starts();
-                         if (!v.has_value()) return nb::none();
-                         return to_numpy(std::vector<std::int32_t>(*v));
+                         if (!v.has_value()) return std::nullopt;
+                         return to_ndarray(std::vector<std::int32_t>(*v));
                      },
                      [](sam_scan& s,
-                        std::optional<std::vector<std::int32_t>> v) {
-                         s.starts() = std::move(v);
+                        std::optional<std::variant<
+                            std::vector<std::int32_t>,
+                            nb::ndarray<nb::numpy, std::int32_t>>> v) {
+                         if (!v) {
+                             s.starts() = std::nullopt;
+                             return;
+                         }
+                         if (auto* vec =
+                                 std::get_if<std::vector<std::int32_t>>(&*v)) {
+                             s.starts() = std::move(*vec);
+                         } else {
+                             auto a =
+                                 std::get<nb::ndarray<nb::numpy, std::int32_t>>(*v);
+                             s.starts() = std::vector<std::int32_t>(
+                                 a.data(), a.data() + a.size());
+                         }
                      },
+                     nb::rv_policy::move,
                      "Per-scan start indices (int32) or None; -1 marks "
                              "an unaligned scan.")
         .def_prop_ro("timescale", [](sam_scan& s) {
             return to_numpy(s.time());
-        }, "Time axis in ns for the full scan length.")
+        }, nb::sig(
+               "def timescale(self) -> numpy.typing.NDArray[numpy.float64]"),
+           "Time axis in ns for the full scan length.")
         .def_prop_ro("downsample_factor", [](sam_scan& s) {
             return s.header().downsample_factor;
         }, "Downsampling factor of the acquisition.")
@@ -210,8 +305,16 @@ void bind_scan(nb::module_& m) {
                     "  - 'max'    - maximum sample value of each scan\n"
                     "  - 'absmax' - maximum absolute sample value of each scan\n"
                     "  - 'power'  - sum of squared samples (signal energy)\n\n"
-                    "Returns an image with dtype int8 ('max' and 'absmax'; "
-                    "absmax saturates abs(-128) to 127) or float32 ('power').")
+                    "Parameters\n"
+                    "----------\n"
+                    "mode : str\n"
+                    "    One of 'max', 'absmax' or 'power'.\n\n"
+                    "Returns\n"
+                    "-------\n"
+                    "numpy.ndarray\n"
+                    "    Image of shape (nlines, cols) with dtype int8 "
+                    "('max', 'absmax'; absmax saturates abs(-128) to 127) or "
+                    "float32 ('power').")
          .def("normalized_data", [](sam_scan& s) {
              return to_numpy(s.normalized_data());
          }, nb::sig(
@@ -224,6 +327,8 @@ void bind_scan(nb::module_& m) {
                   s.set_labels(labels_in(labels), std::move(label_names));
               },
               nb::arg("labels"), nb::arg("label_names") = std::vector<std::string>{},
+              nb::sig(
+                  "def set_labels(self, labels: numpy.typing.NDArray[numpy.int8], label_names: collections.abc.Sequence[str] = []) -> None"),
               "Set the per-scan labels.\n\n"
                       "``labels`` is an int8 array of length nlines * cols; "
                       "label 0 is reserved for 'healthy' and -1 for "
@@ -361,11 +466,23 @@ void bind_scan(nb::module_& m) {
                                        to_numpy3(std::move(r.zxx)));
              },
              nb::arg("nperseg") = 256, nb::arg("noverlap") = 128,
+             nb::sig(
+                 "def _compute_stft(self, nperseg: int = 256, noverlap: int = 128) -> tuple[numpy.typing.NDArray[numpy.float32], numpy.typing.NDArray[numpy.float32], numpy.typing.NDArray[numpy.complex64]]"),
              "Compute the one-sided Short-Time Fourier Transform (STFT) of "
                      "every A-scan.\n\n"
                      "SAM data is real-valued, so only positive-frequency "
                      "bins are produced.\n\n"
-                     "Returns ``(freqs, time, zxx)`` where zxx has shape "
+                     "Parameters\n"
+                     "----------\n"
+                     "nperseg : int, optional\n"
+                     "    Samples per segment.\n"
+                     "noverlap : int, optional\n"
+                     "    Samples of overlap between segments.\n\n"
+                     "Returns\n"
+                     "-------\n"
+                     "(freqs, time, zxx) : tuple of ndarray\n"
+                     "    Frequency bins (n_freqs,), time bins (n_frames,) "
+                     "and the complex STFT of shape "
                      "(n_signals, n_freqs, n_frames).")
         .def("psd",
              [](sam_scan& s, size_t nperseg, size_t noverlap) {
@@ -374,8 +491,19 @@ void bind_scan(nb::module_& m) {
                                        to_numpy(std::move(r.psd)));
              },
              nb::arg("nperseg") = 256, nb::arg("noverlap") = 128,
+             nb::sig(
+                 "def psd(self, nperseg: int = 256, noverlap: int = 128) -> tuple[numpy.typing.NDArray[numpy.float32], numpy.typing.NDArray[numpy.float32]]"),
              "Power spectral density of every A-scan via Welch's method.\n\n"
-                     "Returns ``(freqs, psd)`` where psd has shape "
+                     "Parameters\n"
+                     "----------\n"
+                     "nperseg : int, optional\n"
+                     "    Samples per segment.\n"
+                     "noverlap : int, optional\n"
+                     "    Samples of overlap between segments.\n\n"
+                     "Returns\n"
+                     "-------\n"
+                     "(freqs, psd) : tuple of ndarray\n"
+                     "    Frequency bins (n_freqs,) and the PSD of shape "
                      "(n_signals, n_freqs).")
         .def("power_spectrogram",
              [](sam_scan& s, size_t nperseg, size_t noverlap) {
@@ -386,10 +514,22 @@ void bind_scan(nb::module_& m) {
                                        to_numpy3(std::move(r.sxx)));
              },
              nb::arg("nperseg") = 256, nb::arg("noverlap") = 128,
+             nb::sig(
+                 "def power_spectrogram(self, nperseg: int = 256, noverlap: int = 128) -> tuple[numpy.typing.NDArray[numpy.float32], numpy.typing.NDArray[numpy.float32], numpy.typing.NDArray[numpy.float32]]"),
              "Compute the power spectrogram of every A-scan.\n\n"
                      "Uses the same window and segment parameters as the "
                      "STFT.\n\n"
-                     "Returns ``(freqs, time, sxx)`` where sxx has shape "
+                     "Parameters\n"
+                     "----------\n"
+                     "nperseg : int, optional\n"
+                     "    Samples per segment.\n"
+                     "noverlap : int, optional\n"
+                     "    Samples of overlap between segments.\n\n"
+                     "Returns\n"
+                     "-------\n"
+                     "(freqs, time, sxx) : tuple of ndarray\n"
+                     "    Frequency bins (n_freqs,), time bins (n_frames,) "
+                     "and the power spectrogram of shape "
                      "(n_signals, n_freqs, n_frames).")
         .def("to_h5sam", [](sam_scan& s, const std::string& path) {
             s.to_h5sam(path);

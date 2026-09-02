@@ -47,13 +47,18 @@ nb::object to_numpy(array2d<T>&& a) {
         nb::ndarray<nb::numpy, T>(buf->data(), {buf->rows(), buf->cols()}, owner));
 }
 
+// Owned 1-D array from a numpy vector (used by to_numpy/to_ndarray).
 template <typename T>
-nb::object to_numpy(std::vector<T>&& v) {
+nb::ndarray<nb::numpy, T> to_ndarray(std::vector<T>&& v) {
     auto* buf = new std::vector<T>(std::move(v));
     nb::capsule owner(buf,
                       [](void* p) noexcept { delete static_cast<std::vector<T>*>(p); });
-    return nb::cast(
-        nb::ndarray<nb::numpy, T>(buf->data(), {buf->size()}, owner));
+    return nb::ndarray<nb::numpy, T>(buf->data(), {buf->size()}, owner);
+}
+
+template <typename T>
+nb::object to_numpy(std::vector<T>&& v) {
+    return nb::cast(to_ndarray(std::move(v)));
 }
 
 template <typename T>
