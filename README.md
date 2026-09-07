@@ -7,13 +7,13 @@ Python package and C++ library for Scanning Acoustic Microscopy (SAM) core data 
 The repository uses a git submodule for the bundled FFT backend
 (`external/pocketfft`, a header-only dependency).  Clone with submodules:
 
-```bash
+```sh
 git clone --recurse-submodules git@github.com:FreiburgBDS/samcore.git
 ```
 
 If you already cloned without them (or want to update them):
 
-```bash
+```sh
 git submodule update --init --recursive
 ```
 
@@ -34,28 +34,35 @@ Requires a C++20 compiler and CMake.  Dependencies:
   (installed automatically by pip).
 
 **Nix:**
-```bash
+```sh
 nix-shell
 ```
 
 ### Arch Linux
 
-```bash
+```sh
 sudo pacman -S --needed --noconfirm base-devel cmake ninja hdf5 python-pip
 ```
 
 ### Debian / Ubuntu
-```bash
+```sh
 sudo apt-get update && sudo apt-get -y install cmake ninja-build build-essential \
   libhdf5-dev pkg-config python3-dev python3-pip
 ```
 
 ### Fedora
-```bash
+```sh
 sudo dnf install -y cmake ninja-build gcc-c++ hdf5-devel python3-devel python3-pip
 ```
 
-### MacOS and Windows
+### Windows
+The recommended setup on Windows uses LLVM Clang and Ninja via [conda-forge](https://conda-forge.org/):
+
+```powershell
+conda install -c conda-forge clangxx llvm-openmp hdf5 cmake ninja
+```
+
+### MacOS
 Not yet tested.
 
 ## Python package (samcore)
@@ -64,6 +71,11 @@ Not yet tested.
 
 ```sh
 pip install .
+```
+
+If you followed the recommended Conda setup above, pass the Clang compiler flags to CMake:
+```powershell
+pip install . -C cmake.args="-G Ninja" -C cmake.args="-DCMAKE_CXX_COMPILER=clang++" -C cmake.args="-DCMAKE_C_COMPILER=clang"
 ```
 
 ### Usage
