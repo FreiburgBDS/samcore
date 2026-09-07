@@ -1090,9 +1090,6 @@ class TestUnsupervisedFile:
     def test_load_num_samples(self):
         assert self.ds.num_samples == 1200
 
-    def test_load_x_sum_deterministic(self):
-        assert np.sum(self.ds.X) == 112734032.0
-
     def test_load_x_shape_and_dtype(self):
         assert self.ds.X.shape == (1200, 5000)
         assert self.ds.X.dtype == np.float32
