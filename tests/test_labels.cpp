@@ -168,7 +168,7 @@ TEST(sam_labels, MergeCaseInsensitive) {
 
 TEST(sam_labels, MergeRequiresTwo) {
     sam_labels a({0, 1}, {"healthy", "d"});
-    EXPECT_THROW(merge_labels({a}), std::invalid_argument);
+    EXPECT_THROW((void)merge_labels({a}), std::invalid_argument);
 }
 
 TEST(sam_labels, MergeByNameAcrossInstances) {
@@ -185,7 +185,7 @@ TEST(sam_labels, Take) {
     auto l = make_labels({-1, 0, 1, 2});
     auto t = l.take({3, 1});
     EXPECT_EQ(t.labels(), (std::vector<std::int8_t>{2, 0}));
-    EXPECT_THROW(l.take({}), std::invalid_argument);
+    EXPECT_THROW((void)l.take({}), std::invalid_argument);
 }
 
 TEST(sam_labels, CreateUnlabeled) {

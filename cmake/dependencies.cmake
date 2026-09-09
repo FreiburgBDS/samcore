@@ -35,7 +35,7 @@ if(SAMCORE_BUILD_TESTS)
     message(STATUS "googletest not found, fetching via FetchContent")
     include(FetchContent)
     FetchContent_Declare(googletest
-      URL https://github.com/google/googletest/releases/download/v1.15.2/googletest-1.15.2.tar.gz
+      URL https://github.com/google/googletest/releases/download/v1.18.0/googletest-1.18.0.tar.gz
       DOWNLOAD_EXTRACT_TIMESTAMP TRUE
     )
     set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
