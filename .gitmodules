@@ -1,3 +1,6 @@
 [submodule "external/pocketfft"]
 	path = external/pocketfft
-	url = https://gitlab.mpcdf.mpg.de/mtr/pocketfft.git
+	# The upstream host (gitlab.mpcdf.mpg.de) is often unreachable from CI,
+	# so use the original author's GitHub mirror of the same repository. The
+	# pinned commit is the tip of its `cpp` branch and is byte-identical.
+	url = https://github.com/mreineck/pocketfft.git
