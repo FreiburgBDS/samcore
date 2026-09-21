@@ -55,15 +55,26 @@ sudo apt-get update && sudo apt-get -y install cmake ninja-build build-essential
 sudo dnf install -y cmake ninja-build gcc-c++ hdf5-devel python3-devel python3-pip
 ```
 
-### Windows
-The recommended setup on Windows uses LLVM Clang and Ninja via [conda-forge](https://conda-forge.org/):
+### Windows / macOS
+Both platforms are built with LLVM Clang and Ninja via
+[conda-forge](https://conda-forge.org/): AppleClang on macOS ships no OpenMP,
+and MSVC only implements the outdated OpenMP 2.0.
 
-```powershell
+```sh
 conda install -c conda-forge clangxx llvm-openmp hdf5 cmake ninja
 ```
 
-### MacOS
-Not yet tested.
+On macOS, also point the build at the active conda prefix so CMake finds
+HDF5/OpenMP and the compiler finds `omp.h`:
+
+```sh
+export CC="$CONDA_PREFIX/bin/clang"
+export CXX="$CONDA_PREFIX/bin/clang++"
+export HDF5_ROOT="$CONDA_PREFIX"
+export CMAKE_PREFIX_PATH="$CONDA_PREFIX"
+export CPATH="$CONDA_PREFIX/include"
+export LIBRARY_PATH="$CONDA_PREFIX/lib"
+```
 
 ## Python package (samcore)
 
@@ -73,9 +84,17 @@ Not yet tested.
 pip install .
 ```
 
-If you followed the recommended Conda setup above, pass the Clang compiler flags to CMake:
+If you followed the recommended Conda setup on Windows or macOS, point CMake
+at the Clang toolchain:
+
+Windows (PowerShell):
 ```powershell
 pip install . -C cmake.args="-G Ninja" -C cmake.args="-DCMAKE_CXX_COMPILER=clang++" -C cmake.args="-DCMAKE_C_COMPILER=clang"
+```
+
+macOS (with the environment variables from above exported):
+```sh
+pip install . -C cmake.args="-G Ninja"
 ```
 
 ### Usage
@@ -105,6 +124,9 @@ full typed API.
 cmake -B build -G Ninja
 cmake --build build
 ```
+
+On Windows or macOS, set up the conda toolchain from above first (including
+the exported variables on macOS) so CMake finds Clang and HDF5.
 
 Optional executables (`bench`, `gen_data`, see below):
 
