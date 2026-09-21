@@ -17,10 +17,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # macOS is intentionally omitted for now: AppleClang ships no OpenMP,
+        # and building redistributable HDF5/libomp from source on macOS is not
+        # set up yet (see README: "MacOS: Not yet tested").
         os:
           - ubuntu-latest   # manylinux x86_64
           - ubuntu-24.04-arm # manylinux aarch64
-          - macos-latest
           - windows-latest
 
     steps:
@@ -35,39 +37,47 @@ jobs:
       - name: Install cibuildwheel
         run: python -m pip install --upgrade pip cibuildwheel
 
-      # HDF5 is required (find_package(HDF5 COMPONENTS CXX REQUIRED)).
+      # HDF5 is required (find_package(HDF5 COMPONENTS CXX REQUIRED)). On
+      # Linux it is installed inside the manylinux container (see
+      # CIBW_BEFORE_ALL_LINUX below).
       #
-      # Linux: the wheel build runs inside a manylinux Docker container, so a
-      # host apt-get step can never reach it - HDF5 is installed inside the
-      # container via CIBW_BEFORE_ALL_LINUX below.
-      # Windows: builds use the default MSVC toolchain (the code has explicit
-      # MSVC support and chocolatey's HDF5 is MSVC-built, so the ABIs match;
-      # this is intentional - a native clang++ would clash with MSVC-built
-      # HDF5 libraries).
-      - name: Install HDF5 (macOS)
-        if: runner.os == 'macOS'
-        run: brew install hdf5 ninja
-
+      # On Windows the Chocolatey `hdf5` package no longer exists, so fetch
+      # the HDF Group's prebuilt Windows binaries.  The win-vs2022_cl build
+      # uses MSVC, matching both the runner toolchain and CPython's own ABI -
+      # required because samcore links the HDF5 C++ bindings (hdf5_cpp is
+      # compiler-ABI specific).
       - name: Install HDF5 (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          choco install hdf5 -y --no-progress
-          # Locate the Chocolatey HDF5 prefix and expose it so CMake finds it
-          # and delvewheel can bundle its DLLs. cibuildwheel inherits host env
-          # vars into the isolated build/test environments.
-          $root = Get-ChildItem "C:\Program Files\HDF_Group\HDF5" -Directory |
-            Sort-Object { [version]$_.Name } -Descending | Select-Object -First 1
-          "HDF5_ROOT=$($root.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
-          Write-Host "HDF5_ROOT=$($root.FullName)"
+          $version = "1.14.6"
+          $tmp = "$env:RUNNER_TEMP\hdf5"
+          New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+          $url = "https://github.com/HDFGroup/hdf5/releases/download/hdf5_$version/hdf5-$version-win-vs2022_cl.zip"
+          curl.exe -sSL -o "$tmp\outer.zip" $url
+          # The release zip wraps a second zip that holds the install layout
+          # (include/, lib/, bin/).
+          Expand-Archive -Path "$tmp\outer.zip" -DestinationPath "$tmp\outer"
+          $inner = Get-ChildItem "$tmp\outer" -Recurse -Filter "HDF5-*-win64.zip" |
+            Select-Object -First 1
+          Expand-Archive -Path $inner.FullName -DestinationPath "$tmp\extracted"
+          $root = (Get-ChildItem "$tmp\extracted" -Directory |
+            Select-Object -First 1).FullName
+          # Expose it so CMake (FindHDF5 honours $ENV{HDF5_ROOT}) finds the
+          # package and delvewheel bundles the runtime DLLs.
+          "HDF5_ROOT=$root" | Out-File -FilePath $env:GITHUB_ENV -Append
+          Write-Host "HDF5_ROOT=$root"
 
       - name: Build wheels
         run: python -m cibuildwheel --output-dir wheelhouse
         env:
           CIBW_BUILD: cp39-* cp310-* cp311-* cp312-* cp313-* cp314-*
           CIBW_ARCHS_LINUX: auto
-          CIBW_ARCHS_MACOS: auto
           CIBW_ARCHS_WINDOWS: auto
+          # musllinux (Alpine) is out of scope for now: Alpine uses apk and
+          # splits HDF5's C++ bindings into a separate package, neither of
+          # which the RHEL-based before-all below handles.
+          CIBW_SKIP: "*-musllinux_*"
           # HDF5 + ninja inside the manylinux container. CIBW_BEFORE_ALL_*
           # runs once per container (before the whole CPython matrix), so the
           # system packages are not re-installed for every Python version.
@@ -81,15 +91,17 @@ jobs:
           # wheel test env gets it as the package's declared dependency.
           # Windows: bundle the HDF5 runtime DLLs into the wheel (delvewheel
           # is installed into the build env; HDF5_ROOT comes from the host
-          # install step above).
+          # install step above).  Commands on Windows run under cmd.exe, so
+          # use %VAR% syntax here, not PowerShell's $env:VAR.
           CIBW_BEFORE_BUILD_WINDOWS: python -m pip install delvewheel
           CIBW_REPAIR_WHEEL_COMMAND_WINDOWS: >-
-            delvewheel repair --add-path "$env:HDF5_ROOT\bin" -w {dest_dir} {wheel}
+            delvewheel repair --add-path "%HDF5_ROOT%\bin" -w {dest_dir} {wheel}
           CIBW_TEST_REQUIRES: pytest
           CIBW_TEST_COMMAND: >-
             pytest {project}/tests/python -v -p no:cacheprovider
 
       - name: Show artifacts
+        shell: bash
         run: ls -lh wheelhouse
 
       - uses: actions/upload-artifact@v4

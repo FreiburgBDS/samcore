@@ -13,7 +13,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        # macOS is excluded: AppleClang ships no OpenMP and the HDF5/OpenMP
+        # setup for macOS isn't in place yet (see README: "MacOS: Not yet
+        # tested").
+        os: [ubuntu-latest, windows-latest]
         python: ["3.9", "3.10", "3.11", "3.12", "3.13", "3.14"]
     steps:
       - uses: actions/checkout@v4
@@ -24,9 +27,26 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get -y install libhdf5-dev ninja-build
 
-      - name: Install HDF5 (macOS)
-        if: runner.os == 'macOS'
-        run: brew install hdf5 ninja
+      # Windows has no distro HDF5 package, so use the HDF Group's prebuilt
+      # MSVC binaries (matching the runner toolchain and CPython's ABI, since
+      # samcore links the HDF5 C++ bindings).
+      - name: Install HDF5 (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $version = "1.14.6"
+          $tmp = "$env:RUNNER_TEMP\hdf5"
+          New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+          $url = "https://github.com/HDFGroup/hdf5/releases/download/hdf5_$version/hdf5-$version-win-vs2022_cl.zip"
+          curl.exe -sSL -o "$tmp\outer.zip" $url
+          Expand-Archive -Path "$tmp\outer.zip" -DestinationPath "$tmp\outer"
+          $inner = Get-ChildItem "$tmp\outer" -Recurse -Filter "HDF5-*-win64.zip" |
+            Select-Object -First 1
+          Expand-Archive -Path $inner.FullName -DestinationPath "$tmp\extracted"
+          $root = (Get-ChildItem "$tmp\extracted" -Directory |
+            Select-Object -First 1).FullName
+          "HDF5_ROOT=$root" | Out-File -FilePath $env:GITHUB_ENV -Append
+          Write-Host "HDF5_ROOT=$root"
 
       - name: Set up Python
         uses: actions/setup-python@v5
