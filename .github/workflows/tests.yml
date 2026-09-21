@@ -27,26 +27,11 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get -y install libhdf5-dev ninja-build
 
-      # Windows has no distro HDF5 package, so use the HDF Group's prebuilt
-      # MSVC binaries (matching the runner toolchain and CPython's ABI, since
-      # samcore links the HDF5 C++ bindings).
-      - name: Install HDF5 (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $version = "1.14.6"
-          $tmp = "$env:RUNNER_TEMP\hdf5"
-          New-Item -ItemType Directory -Force -Path $tmp | Out-Null
-          $url = "https://github.com/HDFGroup/hdf5/releases/download/hdf5_$version/hdf5-$version-win-vs2022_cl.zip"
-          curl.exe -sSL -o "$tmp\outer.zip" $url
-          Expand-Archive -Path "$tmp\outer.zip" -DestinationPath "$tmp\outer"
-          $inner = Get-ChildItem "$tmp\outer" -Recurse -Filter "HDF5-*-win64.zip" |
-            Select-Object -First 1
-          Expand-Archive -Path $inner.FullName -DestinationPath "$tmp\extracted"
-          $root = (Get-ChildItem "$tmp\extracted" -Directory |
-            Select-Object -First 1).FullName
-          "HDF5_ROOT=$root" | Out-File -FilePath $env:GITHUB_ENV -Append
-          Write-Host "HDF5_ROOT=$root"
+      # Windows uses the LLVM toolchain from conda-forge (as the README
+      # recommends): samcore's OpenMP loops use unsigned loop indices, which
+      # MSVC's OpenMP 2.0 rejects (error C3016).  The action also installs
+      # HDF5 and llvm-openmp and exports HDF5_ROOT / the compiler env.
+      - uses: ./.github/actions/setup-windows-toolchain
 
       - name: Set up Python
         uses: actions/setup-python@v5
