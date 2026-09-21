@@ -27,6 +27,23 @@ option(SAMCORE_ENABLE_SANITIZERS "Enable ASan+UBSan in Debug builds" ON)
 option(SAMCORE_ENABLE_FAST_MATH "Enable -ffast-math in Release builds" ON)
 option(SAMCORE_ENABLE_LTO "Enable link-time optimization in Release builds" ON)
 
+# Alpine's fortify-headers (musl) define libc functions as always_inline
+# wrappers that GCC cannot inline under -flto ("function body can be
+# overwritten at link time"), which breaks the link.  Disable LTO on musl
+# targets (e.g. musllinux wheels); glibc and the other platforms are fine.
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+  execute_process(COMMAND "${CMAKE_CXX_COMPILER}" -dumpmachine
+    OUTPUT_VARIABLE _samcore_target_triple
+    OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+  if(_samcore_target_triple MATCHES "musl"
+     OR CMAKE_CXX_LIBRARY_ARCHITECTURE MATCHES "musl")
+    if(SAMCORE_ENABLE_LTO)
+      message(STATUS "samcore: disabling LTO for musl target (fortify-headers)")
+    endif()
+    set(SAMCORE_ENABLE_LTO OFF)
+  endif()
+endif()
+
 if(SAMCORE_NATIVE_ARCH)
   add_compile_options(-march=native)
 endif()
