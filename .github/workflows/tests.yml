@@ -40,6 +40,19 @@ jobs:
           python -m pip install --upgrade pip
           pip install .[test]
 
+      # Python 3.8+ no longer searches %PATH% for an extension module's DLL
+      # dependencies, so the conda HDF5/OpenMP runtime DLLs must sit next to
+      # the compiled extension.  The released wheels get this from delvewheel;
+      # here we copy them in for the source install.
+      - name: Bundle runtime DLLs next to extension (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $site = python -c "import sysconfig; print(sysconfig.get_paths()['purelib'])"
+          $pkg = Join-Path $site 'samcore'
+          Copy-Item (Join-Path $env:HDF5_ROOT 'bin\*.dll') $pkg -Force
+          Write-Host "bundled $((Get-ChildItem $pkg -Filter *.dll).Count) runtime DLLs into $pkg"
+
       - name: Run Python tests
         env:
           SAMCORE_TEST_DATA_DIR: tests/data

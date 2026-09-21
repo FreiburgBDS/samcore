@@ -6,6 +6,11 @@ on:
       - "v*"
       - "ci-test*"
   workflow_dispatch:
+    inputs:
+      test_pypi:
+        description: "Also publish the built artifacts to TestPyPI"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -181,3 +186,34 @@ jobs:
       # attestations are enabled by default.  `dist/` holds the wheels + sdist.
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
+
+  publish-testpypi:
+    name: Publish to TestPyPI (dry run)
+    needs: [build-wheels, build-sdist]
+    runs-on: ubuntu-latest
+    # Manual dry run only (workflow_dispatch -> "test_pypi"), so it never runs
+    # on tag pushes.  Requires a trusted publisher on test.pypi.org using the
+    # "testpypi" environment.
+    if: github.event_name == 'workflow_dispatch' && inputs.test_pypi
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/p/samcore
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: wheels-*
+          path: dist
+          merge-multiple: true
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: sdist
+          path: dist
+
+      - name: Publish to TestPyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
