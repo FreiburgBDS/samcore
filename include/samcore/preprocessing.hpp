@@ -2,6 +2,8 @@
 
 #include <samcore/array.hpp>
 
+#include <string>
+
 namespace samcore::preprocessing {
 
 // All functions operate on 2-D signal arrays (n_signals, scanlen) in

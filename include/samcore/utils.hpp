@@ -3,6 +3,7 @@
 #include <complex>
 #include <cstddef>
 #include <span>
+#include <utility>
 #include <vector>
 
 #include <samcore/array.hpp>
