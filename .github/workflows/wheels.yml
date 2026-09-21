@@ -1,0 +1,152 @@
+name: Build wheels & attach to release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-wheels:
+    name: Build wheel on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest   # manylinux x86_64
+          - ubuntu-24.04-arm # manylinux aarch64
+          - macos-latest
+          - windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install cibuildwheel
+        run: python -m pip install --upgrade pip cibuildwheel
+
+      # HDF5 is required (find_package(HDF5 COMPONENTS CXX REQUIRED)).
+      #
+      # Linux: the wheel build runs inside a manylinux Docker container, so a
+      # host apt-get step can never reach it - HDF5 is installed inside the
+      # container via CIBW_BEFORE_ALL_LINUX below.
+      # Windows: builds use the default MSVC toolchain (the code has explicit
+      # MSVC support and chocolatey's HDF5 is MSVC-built, so the ABIs match;
+      # this is intentional - a native clang++ would clash with MSVC-built
+      # HDF5 libraries).
+      - name: Install HDF5 (macOS)
+        if: runner.os == 'macOS'
+        run: brew install hdf5 ninja
+
+      - name: Install HDF5 (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          choco install hdf5 -y --no-progress
+          # Locate the Chocolatey HDF5 prefix and expose it so CMake finds it
+          # and delvewheel can bundle its DLLs. cibuildwheel inherits host env
+          # vars into the isolated build/test environments.
+          $root = Get-ChildItem "C:\Program Files\HDF_Group\HDF5" -Directory |
+            Sort-Object { [version]$_.Name } -Descending | Select-Object -First 1
+          "HDF5_ROOT=$($root.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
+          Write-Host "HDF5_ROOT=$($root.FullName)"
+
+      - name: Build wheels
+        run: python -m cibuildwheel --output-dir wheelhouse
+        env:
+          CIBW_BUILD: cp39-* cp310-* cp311-* cp312-* cp313-* cp314-*
+          CIBW_ARCHS_LINUX: auto
+          CIBW_ARCHS_MACOS: auto
+          CIBW_ARCHS_WINDOWS: auto
+          # HDF5 + ninja inside the manylinux container. CIBW_BEFORE_ALL_*
+          # runs once per container (before the whole CPython matrix), so the
+          # system packages are not re-installed for every Python version.
+          # manylinux images are RHEL-based but the package manager varies
+          # (manylinux2014 = yum, manylinux_2_28+ = dnf), so try both.
+          CIBW_BEFORE_ALL_LINUX: >-
+            yum install -y hdf5-devel ninja-build ||
+            dnf install -y hdf5-devel ninja-build
+          # numpy is intentionally NOT installed here: pip's build isolation
+          # pulls it from [build-system].requires in pyproject.toml, and the
+          # wheel test env gets it as the package's declared dependency.
+          # Windows: bundle the HDF5 runtime DLLs into the wheel (delvewheel
+          # is installed into the build env; HDF5_ROOT comes from the host
+          # install step above).
+          CIBW_BEFORE_BUILD_WINDOWS: python -m pip install delvewheel
+          CIBW_REPAIR_WHEEL_COMMAND_WINDOWS: >-
+            delvewheel repair --add-path "$env:HDF5_ROOT\bin" -w {dest_dir} {wheel}
+          CIBW_TEST_REQUIRES: pytest
+          CIBW_TEST_COMMAND: >-
+            pytest {project}/tests/python -v -p no:cacheprovider
+
+      - name: Show artifacts
+        run: ls -lh wheelhouse
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-${{ matrix.os }}
+          path: wheelhouse/*.whl
+
+  build-sdist:
+    name: Build sdist
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install HDF5
+        run: |
+          sudo apt-get update
+          sudo apt-get -y install libhdf5-dev ninja-build
+
+      - name: Build sdist
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build --sdist --outdir dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sdist
+          path: dist/*.tar.gz
+
+  publish:
+    name: Attach artifacts to GitHub Release
+    needs: [build-wheels, build-sdist]
+    runs-on: ubuntu-latest
+    # Only run for tag pushes; attach to the release for that tag.
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: wheels-*
+          path: dist
+          merge-multiple: true
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: sdist
+          path: dist
+
+      - name: List artifacts
+        run: ls -lh dist
+
+      - name: Attach wheels to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
