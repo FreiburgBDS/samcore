@@ -150,3 +150,34 @@ jobs:
           # ci-test* releases are marked prerelease so they never become
           # the repository's "Latest" release.
           prerelease: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+
+  publish-pypi:
+    name: Publish to PyPI
+    needs: [build-wheels, build-sdist]
+    runs-on: ubuntu-latest
+    # Real releases only - the ci-test* tags must never reach PyPI.
+    if: startsWith(github.ref, 'refs/tags/v')
+    # Must match the "Environment name" configured for the trusted publisher
+    # on PyPI (see README).  Add required reviewers here for a manual gate.
+    environment:
+      name: pypi
+      url: https://pypi.org/p/samcore
+    permissions:
+      id-token: write # OIDC trusted publishing (no API token/secret)
+      contents: read
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: wheels-*
+          path: dist
+          merge-multiple: true
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: sdist
+          path: dist
+
+      # Trusted Publishing: authenticates via the GitHub OIDC token.  PEP 740
+      # attestations are enabled by default.  `dist/` holds the wheels + sdist.
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
