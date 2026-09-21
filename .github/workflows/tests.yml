@@ -13,10 +13,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # macOS is excluded: AppleClang ships no OpenMP and the HDF5/OpenMP
-        # setup for macOS isn't in place yet (see README: "MacOS: Not yet
-        # tested").
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest, macos-latest, windows-latest]
         python: ["3.9", "3.10", "3.11", "3.12", "3.13", "3.14"]
     steps:
       - uses: actions/checkout@v4
@@ -27,11 +24,11 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get -y install libhdf5-dev ninja-build
 
-      # Windows uses the LLVM toolchain from conda-forge (as the README
-      # recommends): samcore's OpenMP loops use unsigned loop indices, which
-      # MSVC's OpenMP 2.0 rejects (error C3016).  The action also installs
-      # HDF5 and llvm-openmp and exports HDF5_ROOT / the compiler env.
-      - uses: ./.github/actions/setup-windows-toolchain
+      # Windows/macOS use the conda-forge LLVM toolchain (as the README
+      # recommends): MSVC's OpenMP 2.0 rejects the unsigned loop indices
+      # (error C3016) and AppleClang has no OpenMP.  The action also installs
+      # HDF5 and llvm-openmp and exports the compiler env.
+      - uses: ./.github/actions/setup-conda-toolchain
 
       - name: Set up Python
         uses: actions/setup-python@v5

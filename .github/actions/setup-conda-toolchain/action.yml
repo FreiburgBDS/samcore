@@ -1,0 +1,93 @@
+name: Set up Clang/conda toolchain (Windows & macOS)
+description: >-
+  Install Clang, the LLVM OpenMP runtime and HDF5 from conda-forge for
+  building samcore on Windows and macOS.
+
+# samcore's OpenMP loops use unsigned (size_t) loop indices, which MSVC's
+# OpenMP 2.0 implementation rejects with error C3016. GCC/Clang accept them,
+# so the README recommends LLVM Clang, and this mirrors it: conda-forge
+# provides Clang, llvm-openmp and HDF5 in one ABI-consistent environment.
+#
+# Windows: conda-forge does NOT ship the Windows SDK import libraries
+# (kernel32.lib, ...) - the `vc`/`ucrt` packages only contain the runtime.
+# clang and lld-link trust %INCLUDE%/%LIB% when set and then skip
+# auto-detecting the SDK, so the MSVC developer environment must be
+# initialized as well and the conda prefix prepended to it.
+#
+# macOS: AppleClang has no OpenMP, hence the conda-forge clang + libomp.
+#
+# On Linux runners every step below is a no-op.
+
+runs:
+  using: composite
+  steps:
+    # Initializes the MSVC + Windows SDK %INCLUDE%/%LIB%/%PATH% environment.
+    - name: Initialize MSVC environment (Windows)
+      if: runner.os == 'Windows'
+      uses: ilammy/msvc-dev-cmd@v1
+      with:
+        arch: x64
+
+    - name: Create conda-forge toolchain environment
+      if: runner.os != 'Linux'
+      id: conda
+      uses: mamba-org/setup-micromamba@v3
+      with:
+        environment-name: samcore-build
+        create-args: >-
+          clangxx
+          llvm-openmp
+          hdf5=1.14
+          cmake
+          ninja
+        init-shell: none
+        cache-environment: true
+
+    - name: Export toolchain env (Windows)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        $prefix = "${{ steps.conda.outputs.environment-path }}"
+        if (-not $env:INCLUDE -or -not $env:LIB) {
+          throw "MSVC environment (INCLUDE/LIB) was not initialized by the previous step"
+        }
+        "$prefix\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
+        "$prefix\Library\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
+        # Prepend the conda prefix to the MSVC-provided INCLUDE/LIB so the
+        # build finds omp.h / libomp / HDF5 while the Windows SDK import libs
+        # stay on the search path.  LTO is disabled because clang's -flto
+        # needs lld-link on Windows (link.exe cannot consume LLVM bitcode).
+        @(
+          "HDF5_ROOT=$prefix\Library"
+          "CMAKE_PREFIX_PATH=$prefix\Library"
+          "INCLUDE=$prefix\Library\include;$env:INCLUDE"
+          "LIB=$prefix\Library\lib;$env:LIB"
+          "CC=$prefix\Library\bin\clang.exe"
+          "CXX=$prefix\Library\bin\clang++.exe"
+          "CMAKE_ARGS=-G Ninja -DSAMCORE_ENABLE_LTO=OFF"
+        ) | Out-File -FilePath $env:GITHUB_ENV -Append
+        Write-Host "Windows toolchain prefix: $prefix"
+
+    - name: Export toolchain env (macOS)
+      if: runner.os == 'macOS'
+      shell: bash
+      run: |
+        prefix="${{ steps.conda.outputs.environment-path }}"
+        if [ ! -x "$prefix/bin/clang++" ]; then
+          echo "clang++ not found in $prefix/bin" >&2
+          exit 1
+        fi
+        echo "$prefix/bin" >> "$GITHUB_PATH"
+        # CPATH/LIBRARY_PATH let the build find omp.h/libomp/HDF5 while
+        # CMAKE_PREFIX_PATH/HDF5_ROOT cover CMake's find_package.
+        {
+          echo "CC=$prefix/bin/clang"
+          echo "CXX=$prefix/bin/clang++"
+          echo "HDF5_ROOT=$prefix"
+          echo "CMAKE_PREFIX_PATH=$prefix"
+          echo "CPATH=$prefix/include"
+          echo "LIBRARY_PATH=$prefix/lib"
+          echo "SDKROOT=$(xcrun --show-sdk-path)"
+          echo "CMAKE_ARGS=-G Ninja"
+        } >> "$GITHUB_ENV"
+        echo "macOS toolchain prefix: $prefix"
