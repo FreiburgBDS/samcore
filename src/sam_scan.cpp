@@ -324,13 +324,18 @@ void sam_scan::downsample(size_t factor, downsample_mode mode) {
                     seg[k] = data_[s][i * factor + k];
                 }
                 const size_t half = factor / 2;
-                std::nth_element(seg.begin(), seg.begin() + static_cast<std::ptrdiff_t>(half - 1),
-                                 seg.end());
                 double median;
                 if (factor % 2 == 1) {
+                    // odd: median is the middle order statistic
+                    std::nth_element(seg.begin(),
+                                     seg.begin() + static_cast<std::ptrdiff_t>(half),
+                                     seg.end());
                     median = seg[half];
                 } else {
-                    // even segments: average of the two middle values
+                    // even segments: average of the two middle order statistics
+                    std::nth_element(seg.begin(),
+                                     seg.begin() + static_cast<std::ptrdiff_t>(half - 1),
+                                     seg.end());
                     const double second =
                         *std::min_element(seg.begin() + static_cast<std::ptrdiff_t>(half),
                                           seg.end());
