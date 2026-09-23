@@ -119,7 +119,7 @@ def train_test_split(self: SAMDataset, test_size: float = 0.2,
     """
     if not (0 < test_size < 1):
         raise ValueError("test_size must be between 0 and 1.")
-    total = self.X.shape[0]
+    total = self.num_samples
     indices = np.arange(total)
     if random_state is not None:
         np.random.seed(random_state)
@@ -513,7 +513,7 @@ def _require_labels(self: SAMDataset) -> None:
 
 def __len__(self: SAMDataset) -> int:
     """Number of signals in the dataset."""
-    return self.X.shape[0]
+    return self.num_samples
 
 
 def __iter__(self: SAMDataset) -> Iterator[_Batch]:

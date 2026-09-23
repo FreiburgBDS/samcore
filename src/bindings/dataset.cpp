@@ -56,10 +56,23 @@ nb::class_<sam_dataset>(m, "SAMDataset", nb::dynamic_attr(),
                      "    When True labels are discarded; when False labels "
                      "are required.  None (default) auto-detects: supervised "
                      "only when all scans are labeled.")
-        .def_static("load", [](const std::string& path) {
-            return sam_dataset::load(path);
-        }, nb::arg("path"),
-           "Load a dataset from a .h5samd file.")
+        .def_static("load", [](const std::string& path, bool mmap) {
+            return sam_dataset::load(path, mmap);
+        }, nb::arg("path"), nb::arg("mmap") = false,
+           "Load a dataset from a .h5samd file.\n\n"
+           "Parameters\n"
+           "----------\n"
+           "path : str\n"
+           "    Path to the .h5samd file.\n"
+           "mmap : bool, optional\n"
+           "    With True the X/Z/V arrays stay on disk until first "
+           "accessed (lazy loading); metadata is always loaded eagerly.")
+        .def_prop_ro("loaded", [](const sam_dataset& d) { return d.loaded(); },
+                     "Whether the dataset data has been loaded into memory "
+                     "(mmap mode).")
+        .def("materialize", [](sam_dataset& d) { d.load(); },
+             "Load the dataset data into memory (mmap mode).  No-op when "
+             "already loaded; every data accessor calls this implicitly.")
         .def("save", [](sam_dataset& d, const std::string& path) { d.save(path); },
              "Save the dataset to a .h5samd file.")
         .def("copy", [](const sam_dataset& d) { return d.copy(); },
@@ -118,7 +131,7 @@ nb::class_<sam_dataset>(m, "SAMDataset", nb::dynamic_attr(),
                      [](const sam_dataset& d) { return d.num_samples(); },
                      "Total number of signals across all cubes.")
         .def_prop_ro("num_features", [](const sam_dataset& d) -> nb::object {
-            return d.Z().has_value()
+            return d.has_z()
                        ? nb::cast(static_cast<size_t>(d.num_features()))
                         : nb::none();
         }, nb::sig("def num_features(self) -> int | None"),

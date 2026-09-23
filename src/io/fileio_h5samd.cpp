@@ -7,6 +7,7 @@
 #include <numeric>
 
 #include "h5_common.hpp"
+#include "h5_lazy.hpp"
 
 namespace samcore::io {
 
@@ -67,6 +68,68 @@ void write_cube_shapes(H5::H5File& file,
     if (!buf.empty()) dset.write(buf.data(), H5::PredType::NATIVE_INT32);
 }
 
+// Shape of a 2-D dataset (same validation as detail::read_2d).
+std::pair<size_t, size_t> dataset_dims(H5::DataSet& dset) {
+    H5::DataSpace space = dset.getSpace();
+    if (space.getSimpleExtentNdims() != 2) {
+        throw std::runtime_error("expected a 2-D dataset");
+    }
+    hsize_t dims[2];
+    space.getSimpleExtentDims(dims);
+    return {static_cast<size_t>(dims[0]), static_cast<size_t>(dims[1])};
+}
+
+// Everything except X/Z/V, shared by the eager and lazy readers.  x_cols is
+// used for the uniform-scanlen fallback when the file has no `scanlens`.
+struct h5samd_meta {
+    std::optional<sam_labels> labels;
+    std::vector<std::pair<std::int32_t, std::int32_t>> cube_shapes;
+    std::vector<double> cube_resolutions;
+    std::vector<std::int32_t> scanlens;
+    bool unsupervised = false;
+};
+
+h5samd_meta read_h5samd_meta(H5::H5File& file, size_t x_cols) {
+    h5samd_meta meta;
+    meta.unsupervised = read_unsupervised(file);
+
+    std::vector<std::int8_t> labels_arr;
+    if (file.nameExists("labels")) {
+        H5::DataSet dset = file.openDataSet("labels");
+        labels_arr.resize(static_cast<size_t>(dset.getSpace().getSimpleExtentNpoints()));
+        if (!labels_arr.empty()) dset.read(labels_arr.data(), H5::PredType::NATIVE_INT8);
+    }
+    std::vector<std::string> label_names;
+    if (file.nameExists("label_names")) {
+        H5::DataSet ndset = file.openDataSet("label_names");
+        label_names = detail::read_strings_1d(ndset);
+    }
+    if (!meta.unsupervised && !labels_arr.empty()) {
+        meta.labels = sam_labels(std::move(labels_arr), std::move(label_names));
+    }
+
+    meta.cube_shapes = read_cube_shapes(file);
+
+    if (file.nameExists("cube_resolutions")) {
+        H5::DataSet dset = file.openDataSet("cube_resolutions");
+        H5::DataSpace space = dset.getSpace();
+        std::vector<double> buf(static_cast<size_t>(space.getSimpleExtentNpoints()));
+        if (!buf.empty()) dset.read(buf.data(), H5::PredType::NATIVE_DOUBLE);
+        meta.cube_resolutions = std::move(buf);
+    }
+
+    if (file.nameExists("scanlens")) {
+        H5::DataSet dset = file.openDataSet("scanlens");
+        meta.scanlens = detail::read_i32_1d(dset);
+    } else {
+        // fallback: uniform scan length
+        for (size_t i = 0; i < meta.cube_shapes.size(); ++i) {
+            meta.scanlens.push_back(static_cast<std::int32_t>(x_cols));
+        }
+    }
+    return meta;
+}
+
 } // namespace
 
 h5samd_result read_h5samd(const std::filesystem::path& path) {
@@ -77,47 +140,19 @@ h5samd_result read_h5samd(const std::filesystem::path& path) {
         H5::H5File file(path.string(), H5F_ACC_RDONLY);
 
         h5samd_result result;
+        size_t x_cols = 0;
         if (file.nameExists("X")) {
             H5::DataSet dset = file.openDataSet("X");
             result.x = detail::read_2d<float>(dset, H5::PredType::NATIVE_FLOAT);
+            x_cols = result.x.cols();
         }
 
-        result.unsupervised = read_unsupervised(file);
-
-        std::vector<std::int8_t> labels_arr;
-        if (file.nameExists("labels")) {
-            H5::DataSet dset = file.openDataSet("labels");
-            labels_arr.resize(static_cast<size_t>(dset.getSpace().getSimpleExtentNpoints()));
-            if (!labels_arr.empty()) dset.read(labels_arr.data(), H5::PredType::NATIVE_INT8);
-        }
-        std::vector<std::string> label_names;
-        if (file.nameExists("label_names")) {
-            H5::DataSet ndset = file.openDataSet("label_names");
-            label_names = detail::read_strings_1d(ndset);
-        }
-        if (!result.unsupervised && !labels_arr.empty()) {
-            result.labels = sam_labels(std::move(labels_arr), std::move(label_names));
-        }
-
-        result.cube_shapes = read_cube_shapes(file);
-
-        if (file.nameExists("cube_resolutions")) {
-            H5::DataSet dset = file.openDataSet("cube_resolutions");
-            H5::DataSpace space = dset.getSpace();
-            std::vector<double> buf(static_cast<size_t>(space.getSimpleExtentNpoints()));
-            if (!buf.empty()) dset.read(buf.data(), H5::PredType::NATIVE_DOUBLE);
-            result.cube_resolutions = std::move(buf);
-        }
-
-        if (file.nameExists("scanlens")) {
-            H5::DataSet dset = file.openDataSet("scanlens");
-            result.scanlens = detail::read_i32_1d(dset);
-        } else {
-            // fallback: uniform scan length
-            for (size_t i = 0; i < result.cube_shapes.size(); ++i) {
-                result.scanlens.push_back(static_cast<std::int32_t>(result.x.cols()));
-            }
-        }
+        h5samd_meta meta = read_h5samd_meta(file, x_cols);
+        result.unsupervised = meta.unsupervised;
+        result.labels = std::move(meta.labels);
+        result.cube_shapes = std::move(meta.cube_shapes);
+        result.cube_resolutions = std::move(meta.cube_resolutions);
+        result.scanlens = std::move(meta.scanlens);
 
         if (file.nameExists("Z")) {
             H5::DataSet dset = file.openDataSet("Z");
@@ -131,6 +166,63 @@ h5samd_result read_h5samd(const std::filesystem::path& path) {
     } catch (const H5::Exception&) {
         detail::rethrow_h5("read_h5samd(" + path.string() + ")");
     }
+}
+
+h5samd_lazy_handle read_h5samd_lazy(const std::filesystem::path& path) {
+    if (path.extension().string() != ".h5samd") {
+        throw std::invalid_argument("Path must end with .h5samd");
+    }
+    try {
+        H5::H5File file(path.string(), H5F_ACC_RDONLY);
+        auto state = std::make_unique<h5samd_lazy_state>();
+
+        if (file.nameExists("X")) {
+            H5::DataSet dset = file.openDataSet("X");
+            const auto [rows, cols] = dataset_dims(dset);
+            state->x_rows = rows;
+            state->x_cols = cols;
+            state->x.emplace(std::move(dset));
+        }
+
+        h5samd_lazy_handle handle;
+        h5samd_meta meta = read_h5samd_meta(file, state->x_cols);
+        handle.unsupervised = meta.unsupervised;
+        handle.labels = std::move(meta.labels);
+        handle.cube_shapes = std::move(meta.cube_shapes);
+        handle.cube_resolutions = std::move(meta.cube_resolutions);
+        handle.scanlens = std::move(meta.scanlens);
+
+        if (file.nameExists("Z")) {
+            H5::DataSet dset = file.openDataSet("Z");
+            state->z_cols = dataset_dims(dset).second;
+            state->z.emplace(std::move(dset));
+        }
+        if (file.nameExists("V")) {
+            H5::DataSet dset = file.openDataSet("V");
+            state->v_cols = dataset_dims(dset).second;
+            state->v.emplace(std::move(dset));
+        }
+
+        state->file = std::move(file);
+        handle.data = std::move(state);
+        return handle;
+    } catch (const H5::Exception&) {
+        detail::rethrow_h5("read_h5samd_lazy(" + path.string() + ")");
+    }
+}
+
+h5samd_lazy_data read_h5samd_lazy_data(h5samd_lazy_state& state) {
+    h5samd_lazy_data out;
+    if (state.x) {
+        out.x = detail::read_2d<float>(*state.x, H5::PredType::NATIVE_FLOAT);
+    }
+    if (state.z) {
+        out.z = detail::read_2d<float>(*state.z, H5::PredType::NATIVE_FLOAT);
+    }
+    if (state.v) {
+        out.v = detail::read_2d<float>(*state.v, H5::PredType::NATIVE_FLOAT);
+    }
+    return out;
 }
 
 void write_h5samd(const std::filesystem::path& path, const array2d<float>& x,

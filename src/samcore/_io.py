@@ -65,20 +65,23 @@ class io:
         _io.write_h5sam(path, data, header, samlabels, starts)
 
     @staticmethod
-    def read_h5samd(path: str) -> SAMDataset:
+    def read_h5samd(path: str, mmap: bool = False) -> SAMDataset:
         """Read a .h5samd file as a :class:`SAMDataset`.
 
         Parameters
         ----------
         path : str
             Path to the .h5samd file.
+        mmap : bool, optional
+            With True the X/Z/V arrays stay on disk until first accessed
+            (lazy loading); metadata is always loaded eagerly.
 
         Returns
         -------
         SAMDataset
             The loaded dataset.
         """
-        return _io.read_h5samd(path)
+        return _io.read_h5samd(path, mmap)
 
     @staticmethod
     def convert_h5sam_to_h5samd(input_paths: List[str], output_path: str,
