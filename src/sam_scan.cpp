@@ -133,6 +133,11 @@ sam_scan sam_scan::from_data(array2d<std::int8_t> data, sam_header header,
     }
     sam_scan scan;
     scan.data_ = std::move(data);
+    // The handler always owns its data: materialize a non-owning input view
+    // so copy()/to_h5sam() cannot alias or silently drop borrowed memory.
+    if (scan.data_.is_view()) {
+        scan.data_ = array2d<std::int8_t>(scan.data_);
+    }
     scan.header_ = std::move(header);
     scan.path_ = {};
     scan.starts_ = std::move(starts);

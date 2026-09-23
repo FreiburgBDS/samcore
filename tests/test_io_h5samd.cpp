@@ -132,6 +132,33 @@ TEST(sam_dataset, CubeExtraction) {
     EXPECT_FLOAT_EQ(cube.flat()[0], ds.X()[0][0]);
 }
 
+TEST(sam_dataset, ViewInputIsMaterializedOnCopyAndSaved) {
+    sam_dataset ds({make_cube(2, 3, 8, 0, 1.0)}, 0.0f, true);
+    std::vector<float> ext(ds.num_samples() * ds.maxlen());
+    for (size_t i = 0; i < ext.size(); ++i) {
+        ext[i] = static_cast<float>(i + 1);
+    }
+    ds.X() = array2d<float>(ext.data(), ds.num_samples(), ds.maxlen(),
+                            non_owning);
+    ASSERT_TRUE(ds.X().is_view());
+
+    sam_dataset ds2 = ds.copy(); // documented deep copy
+    EXPECT_FALSE(ds2.X().is_view());
+
+    ext[0] = 123.0f;
+    EXPECT_FLOAT_EQ(ds2.X()[0][0], 1.0f); // copy did not alias
+
+    // Cube extraction and save read through the view correctly.
+    auto cube = ds.get_cube_X(0);
+    EXPECT_FLOAT_EQ(cube.flat()[0], 123.0f);
+
+    const std::filesystem::path out = tmp_file("samcore_ds_view.h5samd");
+    ds.save(out);
+    auto loaded = sam_dataset::load(out);
+    EXPECT_FLOAT_EQ(loaded.X()[0][0], 123.0f);
+    std::filesystem::remove(out);
+}
+
 TEST(sam_dataset, CubeLabels) {
     auto scan = make_cube(2, 2, 64, 0, 1.0);
     scan.set_labels({0, 1, 2, 1}, {"healthy", "defect", "other"});

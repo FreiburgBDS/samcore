@@ -40,6 +40,9 @@ using in_f32_1 = nb::ndarray<const float, nb::numpy, nb::ndim<1>, nb::c_contig>;
 
 template <typename T>
 nb::object to_numpy(array2d<T>&& a) {
+    // A non-owning input would leave numpy pointing at memory the capsule
+    // does not own; materialize it first.
+    if (a.is_view()) a = array2d<T>(a);
     auto* buf = new array2d<T>(std::move(a));
     nb::capsule owner(buf,
                       [](void* p) noexcept { delete static_cast<array2d<T>*>(p); });
@@ -71,7 +74,10 @@ nb::object to_numpy3(array3d<T>&& a) {
 }
 
 // Zero-copy view over the (possibly converted) input array.  Safe because
-// by-value ndarrays keep their storage alive for the whole call.
+// by-value ndarrays keep their storage alive for the whole call.  For
+// read-only, transient use only: the const is cast away to fit
+// array2d<T>, so callers must neither write through the view nor store it
+// beyond the call (copy it, which materializes, to keep the data).
 template <typename T>
 array2d<T> view_in(nb::ndarray<const T, nb::numpy, nb::ndim<2>, nb::c_contig> a) {
     return array2d<T>(const_cast<T*>(a.data()), a.shape(0), a.shape(1),

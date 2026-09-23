@@ -42,6 +42,24 @@ TEST(sam_scan, FromDataValidation) {
     EXPECT_THROW((void)sam_scan::from_data(bad_cols, header), std::invalid_argument);
 }
 
+TEST(sam_scan, FromDataViewMaterializes) {
+    sam_header header(2, 2, 4, 100.0, 0, 1.0); // rows=4, scanlen=4
+    std::int8_t ext[16];
+    for (int i = 0; i < 16; ++i) ext[i] = static_cast<std::int8_t>(i + 1);
+
+    sam_scan h = sam_scan::from_data(
+        array2d<std::int8_t>(ext, 4, 4, non_owning), header);
+    EXPECT_FALSE(h.data().is_view());
+    EXPECT_EQ(h.data().size(), 16);
+
+    sam_scan c = h.copy(); // documented deep copy
+    EXPECT_FALSE(c.data().is_view());
+
+    ext[0] = 99; // the handler must own its data
+    EXPECT_EQ(h.data()[0][0], 1);
+    EXPECT_EQ(c.data()[0][0], 1);
+}
+
 TEST(sam_scan, AccessorsAndShape) {
     auto h = make_scan(3, 4, 200);
     EXPECT_EQ(h.nlines(), 3);
