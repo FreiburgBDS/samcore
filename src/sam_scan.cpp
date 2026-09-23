@@ -24,79 +24,62 @@ std::string extension_lower(const std::filesystem::path& path) {
     return ext;
 }
 
-// Rotate a flat index grid by k 90-degree turns (numpy rot90 parity):
-// k = -1 -> 90 deg CW, k = -2 -> 180, k = -3 -> 90 deg CCW.
-void rotate_indices(std::int64_t nlines, std::int64_t cols, int k,
-                    std::int64_t& out_nlines, std::int64_t& out_cols,
-                    std::vector<size_t>& flat_after) {
-    const size_t nl = static_cast<size_t>(nlines);
-    const size_t nc = static_cast<size_t>(cols);
-    const size_t total = nl * nc;
-    flat_after.resize(total);
-    if (k == -2) {
-        out_nlines = nlines;
-        out_cols = cols;
-        for (size_t i = 0; i < nl; ++i) {
-            for (size_t j = 0; j < nc; ++j) {
-                flat_after[i * nc + j] = (nl - 1 - i) * nc + (nc - 1 - j);
-            }
-        }
-    } else if (k == -1) {
-        // 90 CW: out[i, j] = in[nl-1-j, i], shape (nc, nl)
-        out_nlines = cols;
-        out_cols = nlines;
-        for (size_t i = 0; i < nc; ++i) {
-            for (size_t j = 0; j < nl; ++j) {
-                flat_after[i * nl + j] = (nl - 1 - j) * nc + i;
-            }
-        }
-    } else { // k == -3: 90 CCW
-        // out[i, j] = in[j, nc-1-i], shape (nc, nl)
-        out_nlines = cols;
-        out_cols = nlines;
-        for (size_t i = 0; i < nc; ++i) {
-            for (size_t j = 0; j < nl; ++j) {
-                flat_after[i * nl + j] = j * nc + (nc - 1 - i);
-            }
-        }
+// Swap two equal-size contiguous byte ranges through a scratch buffer.
+void swap_blocks(std::int8_t* a, std::int8_t* b, size_t bytes,
+                 std::int8_t* scratch) {
+    std::memcpy(scratch, a, bytes);
+    std::memcpy(a, b, bytes);
+    std::memcpy(b, scratch, bytes);
+}
+
+// Rebuild labels/starts so that output index o takes the value at
+// in_index(o), the inverse permutation of the data movement.
+template <class F>
+void permute_labels_starts(sam_labels& labels,
+                           std::optional<std::vector<std::int32_t>>& starts,
+                           size_t total, const F& in_index) {
+    if (labels.size() == total) {
+        const auto& old = labels.labels();
+        std::vector<std::int8_t> out(total);
+#ifdef SAMCORE_HAS_OPENMP
+#pragma omp parallel for if (total > 8) schedule(static)
+#endif
+        for (size_t o = 0; o < total; ++o) out[o] = old[in_index(o)];
+        labels.set_labels(std::move(out));
+    }
+    if (starts.has_value() && starts->size() == total) {
+        const auto& old = *starts;
+        std::vector<std::int32_t> out(total);
+#ifdef SAMCORE_HAS_OPENMP
+#pragma omp parallel for if (total > 8) schedule(static)
+#endif
+        for (size_t o = 0; o < total; ++o) out[o] = old[in_index(o)];
+        starts = std::move(out);
     }
 }
 
-void mirror_indices(std::int64_t nlines, std::int64_t cols, mirror_axis axis,
-                    std::vector<size_t>& flat_after) {
-    const size_t nl = static_cast<size_t>(nlines);
-    const size_t nc = static_cast<size_t>(cols);
-    flat_after.resize(nl * nc);
-    for (size_t i = 0; i < nl; ++i) {
-        for (size_t j = 0; j < nc; ++j) {
-            if (axis == mirror_axis::x) {
-                flat_after[i * nc + j] = i * nc + (nc - 1 - j);
-            } else {
-                flat_after[i * nc + j] = (nl - 1 - i) * nc + j;
-            }
+// In-place permutation of whole signal rows along the cycles of in_index
+// (one scratch row, no full-size temporary).
+template <class F>
+void rotate_rows_inplace(array2d<std::int8_t>& data, size_t total, size_t sl,
+                         const F& in_index) {
+    std::vector<std::uint8_t> visited(total, 0);
+    std::vector<std::int8_t> tmp(sl);
+    for (size_t s = 0; s < total; ++s) {
+        if (visited[s]) continue;
+        std::memcpy(tmp.data(), data[s].data(), sl);
+        size_t cur = s;
+        while (true) {
+            const size_t prev = in_index(cur);
+            if (prev == s) break;
+            std::memcpy(data[cur].data(), data[prev].data(), sl);
+            visited[cur] = 1;
+            cur = prev;
         }
+        std::memcpy(data[cur].data(), tmp.data(), sl);
+        visited[cur] = 1;
+        visited[s] = 1;
     }
-}
-
-void apply_permutation(array2d<std::int8_t>& data,
-                       const std::vector<size_t>& flat_after) {
-    array2d<std::int8_t> out(data.rows(), data.cols());
-    const size_t row_bytes = data.cols() * sizeof(std::int8_t);
-    for (size_t i = 0; i < flat_after.size(); ++i) {
-        std::memcpy(out[i].data(), data[flat_after[i]].data(), row_bytes);
-    }
-    data = std::move(out);
-}
-
-std::vector<std::int32_t> permute_starts(
-    const std::optional<std::vector<std::int32_t>>& starts,
-    const std::vector<size_t>& flat_after) {
-    if (!starts) return {};
-    std::vector<std::int32_t> out(starts->size());
-    for (size_t i = 0; i < flat_after.size(); ++i) {
-        out[i] = (*starts)[flat_after[i]];
-    }
-    return out;
 }
 
 } // namespace
@@ -378,24 +361,51 @@ void sam_scan::rotate(int degrees) {
     }
     if (d == 0) return;
 
-    const int k = -(d / 90);
-    std::int64_t new_nlines, new_cols;
-    std::vector<size_t> flat_after;
-    rotate_indices(nlines(), cols(), k, new_nlines, new_cols, flat_after);
+    const size_t nl = static_cast<size_t>(nlines());
+    const size_t nc = static_cast<size_t>(cols());
+    const size_t total = nl * nc;
+    const size_t sl = data_.cols();
 
-    apply_permutation(data_, flat_after);
-    if (labels_.size() == flat_after.size()) {
-        std::vector<std::int8_t> new_labels(flat_after.size());
-        for (size_t i = 0; i < flat_after.size(); ++i) {
-            new_labels[i] = labels_.labels()[flat_after[i]];
+    if (d == 180) {
+        // In place: output signal o takes input signal total-1-o (samples
+        // within each signal stay in order).
+        const size_t pairs = total / 2;
+        if (pairs > 0) {
+#ifdef SAMCORE_HAS_OPENMP
+#pragma omp parallel if (pairs > 8)
+#endif
+            {
+                std::vector<std::int8_t> scratch(sl);
+#ifdef SAMCORE_HAS_OPENMP
+#pragma omp for schedule(static)
+#endif
+                for (size_t p = 0; p < pairs; ++p) {
+                    swap_blocks(data_[p].data(), data_[total - 1 - p].data(),
+                                sl, scratch.data());
+                }
+            }
         }
-        labels_.set_labels(std::move(new_labels));
+        permute_labels_starts(labels_, starts_, total, [nl, nc](size_t o) {
+            const size_t i = o / nc;
+            const size_t j = o % nc;
+            return (nl - 1 - i) * nc + (nc - 1 - j);
+        });
+        return; // shape unchanged
     }
-    if (starts_.has_value()) {
-        starts_ = permute_starts(starts_, flat_after);
-    }
-    header_.nlines = new_nlines;
-    header_.scanspline = new_cols;
+
+    const bool cw = (d == 90);
+    // Output grid is (nc, nl); output flat index o = i*nl + j takes the
+    // signal at input flat index in_index(o).
+    auto in_index = [nl, nc, cw](size_t o) -> size_t {
+        const size_t i = o / nl;
+        const size_t j = o % nl;
+        return cw ? (nl - 1 - j) * nc + i : j * nc + (nc - 1 - i);
+    };
+    rotate_rows_inplace(data_, total, sl, in_index);
+    permute_labels_starts(labels_, starts_, total, in_index);
+
+    header_.nlines = static_cast<std::int64_t>(nc);
+    header_.scanspline = static_cast<std::int64_t>(nl);
 }
 
 sam_scan sam_scan::rotated(int degrees) const {
@@ -406,18 +416,65 @@ sam_scan sam_scan::rotated(int degrees) const {
 
 void sam_scan::mirror(mirror_axis axis) {
     ensure_loaded();
-    std::vector<size_t> flat_after;
-    mirror_indices(nlines(), cols(), axis, flat_after);
-    apply_permutation(data_, flat_after);
-    if (labels_.size() == flat_after.size()) {
-        std::vector<std::int8_t> new_labels(flat_after.size());
-        for (size_t i = 0; i < flat_after.size(); ++i) {
-            new_labels[i] = labels_.labels()[flat_after[i]];
+    const size_t nl = static_cast<size_t>(nlines());
+    const size_t nc = static_cast<size_t>(cols());
+    const size_t total = nl * nc;
+    const size_t sl = data_.cols();
+
+    if (axis == mirror_axis::x) {
+        // Output flat index o = i*nc + j takes input i*nc + (nc-1-j):
+        // reverse the signal order within each line.
+        const size_t pairs_per_line = nc / 2;
+        const size_t pairs = nl * pairs_per_line;
+        if (pairs > 0) {
+#ifdef SAMCORE_HAS_OPENMP
+#pragma omp parallel if (pairs > 8)
+#endif
+            {
+                std::vector<std::int8_t> scratch(sl);
+#ifdef SAMCORE_HAS_OPENMP
+#pragma omp for schedule(static)
+#endif
+                for (size_t p = 0; p < pairs; ++p) {
+                    const size_t line = p / pairs_per_line;
+                    const size_t k = p % pairs_per_line;
+                    swap_blocks(data_[line * nc + k].data(),
+                                data_[line * nc + (nc - 1 - k)].data(), sl,
+                                scratch.data());
+                }
+            }
         }
-        labels_.set_labels(std::move(new_labels));
-    }
-    if (starts_.has_value()) {
-        starts_ = permute_starts(starts_, flat_after);
+        permute_labels_starts(labels_, starts_, total, [nc](size_t o) {
+            const size_t i = o / nc;
+            const size_t j = o % nc;
+            return i * nc + (nc - 1 - j);
+        });
+    } else {
+        // Reverse the line order: swap whole lines (nc signals, one
+        // contiguous block each) keeping the column order within a line.
+        const size_t pairs = nl / 2;
+        if (pairs > 0) {
+            const size_t line_bytes = nc * sl;
+#ifdef SAMCORE_HAS_OPENMP
+#pragma omp parallel if (pairs > 8)
+#endif
+            {
+                std::vector<std::int8_t> scratch(line_bytes);
+#ifdef SAMCORE_HAS_OPENMP
+#pragma omp for schedule(static)
+#endif
+                for (size_t p = 0; p < pairs; ++p) {
+                    swap_blocks(data_[p * nc].data(),
+                                data_[(nl - 1 - p) * nc].data(), line_bytes,
+                                scratch.data());
+                }
+            }
+        }
+        permute_labels_starts(labels_, starts_, total, [nl, nc](size_t o) {
+            const size_t i = o / nc;
+            const size_t j = o % nc;
+            return (nl - 1 - i) * nc + j;
+        });
     }
 }
 
@@ -444,34 +501,40 @@ sam_scan sam_scan::rectangle_select(std::int64_t line_start,
     const std::int64_t new_cols = col_end - col_start;
     const size_t count = static_cast<size_t>(new_nlines * new_cols);
 
-    array2d<std::int8_t> new_data(count, static_cast<size_t>(scanlen()));
-    const size_t row_bytes = static_cast<size_t>(scanlen());
-    size_t r = 0;
-    for (std::int64_t l = line_start; l < line_end; ++l) {
-        for (std::int64_t c = col_start; c < col_end; ++c) {
-            std::memcpy(new_data[r++].data(),
-                        data_[static_cast<size_t>(l * cols() + c)].data(),
-                        row_bytes);
-        }
+    const size_t sl = static_cast<size_t>(scanlen());
+    const size_t ncols = static_cast<size_t>(new_cols);
+    const size_t lines = static_cast<size_t>(new_nlines);
+    const size_t line_bytes = ncols * sl;
+    const size_t in_cols = static_cast<size_t>(cols());
+
+    // The selected columns of one line are consecutive signals, so each
+    // line is a single contiguous memcpy; parallelize over lines.
+    array2d<std::int8_t> new_data(count, sl);
+    std::vector<size_t> idx(count);
+#ifdef SAMCORE_HAS_OPENMP
+#pragma omp parallel for if (lines > 1) schedule(static)
+#endif
+    for (size_t li = 0; li < lines; ++li) {
+        const size_t first =
+            (static_cast<size_t>(line_start) + li) * in_cols +
+            static_cast<size_t>(col_start);
+        std::memcpy(new_data.data() + li * line_bytes,
+                    data_.data() + first * sl, line_bytes);
+        size_t* out_idx = idx.data() + li * ncols;
+        for (size_t c = 0; c < ncols; ++c) out_idx[c] = first + c;
     }
 
     sam_header new_header = header_;
     new_header.nlines = new_nlines;
     new_header.scanspline = new_cols;
 
-    std::vector<size_t> idx;
-    idx.reserve(count);
-    for (std::int64_t l = line_start; l < line_end; ++l) {
-        for (std::int64_t c = col_start; c < col_end; ++c) {
-            idx.push_back(static_cast<size_t>(l * cols() + c));
-        }
-    }
-
     std::optional<std::vector<std::int32_t>> new_starts;
     if (starts_.has_value()) {
-        std::vector<std::int32_t> s;
-        s.reserve(count);
-        for (auto i : idx) s.push_back((*starts_)[i]);
+        std::vector<std::int32_t> s(count);
+#ifdef SAMCORE_HAS_OPENMP
+#pragma omp parallel for if (count > 8) schedule(static)
+#endif
+        for (size_t r = 0; r < count; ++r) s[r] = (*starts_)[idx[r]];
         new_starts = std::move(s);
     }
 
