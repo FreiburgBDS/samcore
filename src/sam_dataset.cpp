@@ -105,20 +105,18 @@ sam_dataset::sam_dataset(std::vector<sam_scan> handlers, float pad_value,
     std::vector<std::pair<std::int32_t, std::int32_t>> shapes;
     std::vector<double> resolutions;
     std::vector<std::int32_t> lens;
-    std::vector<array2d<float>> parts;
+    std::vector<size_t> row_offsets(handlers.size());
 
     size_t maxlen = 0;
-    for (const auto& h : handlers) {
+    size_t total = 0;
+    for (size_t k = 0; k < handlers.size(); ++k) {
+        auto& h = handlers[k];
+        h.load(); // materialize before the parallel build below
         const size_t n = static_cast<size_t>(h.nlines() * h.cols());
         const size_t sl = static_cast<size_t>(h.scanlen());
-        array2d<float> f(n, sl);
-        for (size_t i = 0; i < n; ++i) {
-            for (size_t j = 0; j < sl; ++j) {
-                f[i][j] = static_cast<float>(h.data()[i][j]);
-            }
-        }
+        row_offsets[k] = total;
+        total += n;
         maxlen = std::max(maxlen, sl);
-        parts.push_back(std::move(f));
         shapes.emplace_back(static_cast<std::int32_t>(h.nlines()),
                             static_cast<std::int32_t>(h.cols()));
         resolutions.push_back(h.header().resolution);
@@ -130,18 +128,22 @@ sam_dataset::sam_dataset(std::vector<sam_scan> handlers, float pad_value,
     scanlens_ = std::move(lens);
     pad_value_ = pad_value;
 
-    // Pad to the common length and concatenate.
-    size_t total = 0;
-    for (const auto& p : parts) total += p.rows();
+    // Single pass: pad and convert each signal directly into its row of X.
     x_ = array2d<float>(total, maxlen);
-    size_t offset = 0;
-    for (auto& p : parts) {
-        for (size_t i = 0; i < p.rows(); ++i) {
-            auto dst = x_[offset + i];
-            std::fill(dst.begin(), dst.end(), pad_value);
-            std::copy(p[i].begin(), p[i].end(), dst.begin());
-        }
-        offset += p.rows();
+#ifdef SAMCORE_HAS_OPENMP
+#pragma omp parallel for if (total > 8) schedule(static)
+#endif
+    for (size_t r = 0; r < total; ++r) {
+        const size_t k = static_cast<size_t>(
+                             std::upper_bound(row_offsets.begin(),
+                                              row_offsets.end(), r) -
+                             row_offsets.begin()) -
+                         1;
+        const auto& h = handlers[k];
+        auto dst = x_[r];
+        std::fill(dst.begin(), dst.end(), pad_value);
+        const auto src = h.data()[r - row_offsets[k]];
+        std::copy(src.begin(), src.end(), dst.begin());
     }
 
     if (unsupervised.has_value()) {
