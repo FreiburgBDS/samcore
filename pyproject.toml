@@ -4,7 +4,16 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "samcore"
-description = "SAM (Scanning Acoustic Microscopy) core data processing with a C++ (libsamcore) backend"
+description = "Scanning Acoustic Microscopy (SAM) core data processing package for NDT and battery inspection"
+keywords = [
+    "scanning acoustic microscopy",
+    "SAM",
+    "NDT",
+    "battery",
+    "non-destructive testing",
+    "acoustic",
+    "ultrasound",
+]
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
@@ -36,6 +45,7 @@ sdist.include = [
   "version.txt",
   "LICENSE",
   "README.md",
+  "DEVELOPMENT.md",
 ]
 sdist.exclude = [
   "**/build/**",

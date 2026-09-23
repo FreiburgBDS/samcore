@@ -163,7 +163,7 @@ jobs:
     # Real releases only - the ci-test* tags must never reach PyPI.
     if: startsWith(github.ref, 'refs/tags/v')
     # Must match the "Environment name" configured for the trusted publisher
-    # on PyPI (see README).  Add required reviewers here for a manual gate.
+    # on PyPI.  Add required reviewers here for a manual gate.
     environment:
       name: pypi
       url: https://pypi.org/p/samcore

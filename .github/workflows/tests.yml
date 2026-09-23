@@ -22,7 +22,7 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get -y install libhdf5-dev ninja-build
 
-      # Windows/macOS use the conda-forge LLVM toolchain (as the README
+      # Windows/macOS use the conda-forge LLVM toolchain (as DEVELOPMENT.md
       # recommends): MSVC's OpenMP 2.0 rejects the unsigned loop indices
       # (error C3016) and AppleClang has no OpenMP.  The action also installs
       # HDF5 and llvm-openmp and exports the compiler env.

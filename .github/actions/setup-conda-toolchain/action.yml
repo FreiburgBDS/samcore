@@ -5,8 +5,9 @@ description: >-
 
 # samcore's OpenMP loops use unsigned (size_t) loop indices, which MSVC's
 # OpenMP 2.0 implementation rejects with error C3016. GCC/Clang accept them,
-# so the README recommends LLVM Clang, and this mirrors it: conda-forge
-# provides Clang, llvm-openmp and HDF5 in one ABI-consistent environment.
+# so the DEVELOPMENT.md platform setup recommends LLVM Clang, and this mirrors
+# it: conda-forge provides Clang, llvm-openmp and HDF5 in one ABI-consistent
+# environment.
 #
 # Windows: conda-forge does NOT ship the Windows SDK import libraries
 # (kernel32.lib, ...) - the `vc`/`ucrt` packages only contain the runtime.
