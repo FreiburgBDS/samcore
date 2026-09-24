@@ -98,17 +98,17 @@ target_compile_options(samcore PRIVATE
 # package interface.
 add_library(samcore_debug_flags INTERFACE)
 target_compile_options(samcore_debug_flags INTERFACE
-  $<$<AND:$<COMPILE_LANG_AND_ID:CXX,GNU,Clang>,$<CONFIG:Debug>,$<BOOL:${SAMCORE_ENABLE_SANITIZERS}>>:-fsanitize=address,undefined;-fno-omit-frame-pointer>)
+  $<$<AND:$<COMPILE_LANG_AND_ID:CXX,GNU,Clang,AppleClang>,$<CONFIG:Debug>,$<BOOL:${SAMCORE_ENABLE_SANITIZERS}>>:-fsanitize=address,undefined;-fno-omit-frame-pointer>)
 target_link_options(samcore_debug_flags INTERFACE
-  $<$<AND:$<COMPILE_LANG_AND_ID:CXX,GNU,Clang>,$<CONFIG:Debug>,$<BOOL:${SAMCORE_ENABLE_SANITIZERS}>>:-fsanitize=address,undefined>)
+  $<$<AND:$<COMPILE_LANG_AND_ID:CXX,GNU,Clang,AppleClang>,$<CONFIG:Debug>,$<BOOL:${SAMCORE_ENABLE_SANITIZERS}>>:-fsanitize=address,undefined>)
 
 add_library(samcore_release_flags INTERFACE)
 target_compile_options(samcore_release_flags INTERFACE
-  $<$<COMPILE_LANG_AND_ID:CXX,GNU,Clang>:$<$<CONFIG:Release>:-O2>>
-  $<$<AND:$<COMPILE_LANG_AND_ID:CXX,GNU,Clang>,$<CONFIG:Release>,$<BOOL:${SAMCORE_ENABLE_FAST_MATH}>>:-ffast-math>
-  $<$<AND:$<COMPILE_LANG_AND_ID:CXX,GNU,Clang>,$<CONFIG:Release>,$<BOOL:${SAMCORE_ENABLE_LTO}>>:-flto>)
+  $<$<COMPILE_LANG_AND_ID:CXX,GNU,Clang,AppleClang>:$<$<CONFIG:Release>:-O2>>
+  $<$<AND:$<COMPILE_LANG_AND_ID:CXX,GNU,Clang,AppleClang>,$<CONFIG:Release>,$<BOOL:${SAMCORE_ENABLE_FAST_MATH}>>:-ffast-math>
+  $<$<AND:$<COMPILE_LANG_AND_ID:CXX,GNU,Clang,AppleClang>,$<CONFIG:Release>,$<BOOL:${SAMCORE_ENABLE_LTO}>>:-flto>)
 target_link_options(samcore_release_flags INTERFACE
-  $<$<AND:$<COMPILE_LANG_AND_ID:CXX,GNU,Clang>,$<CONFIG:Release>,$<BOOL:${SAMCORE_ENABLE_LTO}>>:-flto>)
+  $<$<AND:$<COMPILE_LANG_AND_ID:CXX,GNU,Clang,AppleClang>,$<CONFIG:Release>,$<BOOL:${SAMCORE_ENABLE_LTO}>>:-flto>)
 
 target_link_libraries(samcore PUBLIC
   $<BUILD_INTERFACE:samcore_debug_flags>
