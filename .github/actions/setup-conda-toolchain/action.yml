@@ -34,8 +34,13 @@ runs:
       uses: mamba-org/setup-micromamba@v3
       with:
         environment-name: samcore-build
+        # lld/llvm-tools match the conda clang: -flto emits LLVM bitcode, and
+        # the older LLVM tools from the runner image cannot read it (llvm-ar/
+        # lld-link fail with "Unknown attribute kind").
         create-args: >-
           clangxx
+          lld
+          llvm-tools
           llvm-openmp
           hdf5=1.14
           cmake
