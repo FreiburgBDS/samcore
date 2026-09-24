@@ -42,6 +42,24 @@ TEST(sam_scan, FromDataValidation) {
     EXPECT_THROW((void)sam_scan::from_data(bad_cols, header), std::invalid_argument);
 }
 
+TEST(sam_scan, FromDataViewMaterializes) {
+    sam_header header(2, 2, 4, 100.0, 0, 1.0); // rows=4, scanlen=4
+    std::int8_t ext[16];
+    for (int i = 0; i < 16; ++i) ext[i] = static_cast<std::int8_t>(i + 1);
+
+    sam_scan h = sam_scan::from_data(
+        array2d<std::int8_t>(ext, 4, 4, non_owning), header);
+    EXPECT_FALSE(h.data().is_view());
+    EXPECT_EQ(h.data().size(), 16);
+
+    sam_scan c = h.copy(); // documented deep copy
+    EXPECT_FALSE(c.data().is_view());
+
+    ext[0] = 99; // the handler must own its data
+    EXPECT_EQ(h.data()[0][0], 1);
+    EXPECT_EQ(c.data()[0][0], 1);
+}
+
 TEST(sam_scan, AccessorsAndShape) {
     auto h = make_scan(3, 4, 200);
     EXPECT_EQ(h.nlines(), 3);
@@ -168,6 +186,30 @@ TEST(sam_scan, DownsampleMedianMode) {
     h.downsample(4, downsample_mode::median);
     EXPECT_EQ(h.data()[0][0], 1); // median(0,1,2,3) = 1
     EXPECT_EQ(h.data()[0][1], 5); // median(4,5,6,7) = 5
+}
+
+TEST(sam_scan, DownsampleMedianOddFactor) {
+    // Regression: odd factors >= 5 used to read a non-median order
+    // statistic (nth_element at half-1, then seg[half]).
+    const std::int8_t row[30] = {3, 1, 4, 1, 5, 9, 2, 6, 5, 3,
+                                 5, 8, 9, 7, 9, 3, 2, 3, 8, 4,
+                                 6, 2, 6, 4, 3, 3, 8, 3, 2, 7};
+    auto h = make_scan(1, 1, 30);
+    for (size_t j = 0; j < 30; ++j) h.data()[0][j] = row[j];
+    h.downsample(5, downsample_mode::median);
+    ASSERT_EQ(h.scanlen(), 6);
+    const std::int8_t expected[6] = {3, 5, 8, 3, 4, 3};
+    for (size_t j = 0; j < 6; ++j) EXPECT_EQ(h.data()[0][j], expected[j]);
+
+    // odd factor 3 (was coincidentally correct before)
+    auto h3 = make_scan(1, 1, 9);
+    for (size_t j = 0; j < 9; ++j) {
+        h3.data()[0][j] = static_cast<std::int8_t>(8 - j);
+    }
+    h3.downsample(3, downsample_mode::median);
+    EXPECT_EQ(h3.data()[0][0], 7); // median(8,7,6)
+    EXPECT_EQ(h3.data()[0][1], 4); // median(5,4,3)
+    EXPECT_EQ(h3.data()[0][2], 1); // median(2,1,0)
 }
 
 TEST(sam_scan, DownsampleStartsFolded) {

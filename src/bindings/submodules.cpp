@@ -287,11 +287,13 @@ void bind_submodules(nb::module_& m) {
                "def write_h5sam(path: str, data: numpy.typing.NDArray[numpy.int8], header: SAMHeader, samlabels: SAMLabels, starts: collections.abc.Sequence[int] | None = None) -> None"),
            "Write an int8 signal array plus header, labels and "
                    "optional starts to a .h5sam file.");
-    io.def("read_h5samd", [](const std::string& path) {
-        return sam_dataset::load(path);
-    }, nb::arg("path"),
-       nb::sig("def read_h5samd(path: str) -> SAMDataset"),
-       "Read a .h5samd file as a :class:`SAMDataset`.");
+    io.def("read_h5samd", [](const std::string& path, bool mmap) {
+        return sam_dataset::load(path, mmap);
+    }, nb::arg("path"), nb::arg("mmap") = false,
+       nb::sig("def read_h5samd(path: str, mmap: bool = False) -> SAMDataset"),
+       "Read a .h5samd file as a :class:`SAMDataset`.\n\n"
+               "With ``mmap=True`` the X/Z/V arrays stay on disk until "
+               "first accessed (lazy loading).");
     io.def("convert_h5sam_to_h5samd",
            [](const std::vector<std::string>& input_paths,
               const std::string& output_path, float pad_value,

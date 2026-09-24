@@ -68,6 +68,26 @@ TEST(sam_scan, Rotate180IdentityShape) {
     EXPECT_EQ(h.data()[1][0], orig.data()[4][0]);
 }
 
+TEST(sam_scan, Rotate180KeepsSamplesInOrder) {
+    // Regression: rotating 180 must permute whole signals only; samples
+    // inside a signal stay in time order.
+    sam_header header(2, 2, 3, 100.0, 0, 1.0); // 2 lines x 2 cols
+    array2d<std::int8_t> data(4, 3);
+    for (size_t i = 0; i < 4; ++i) {
+        for (size_t j = 0; j < 3; ++j) {
+            data[i][j] = static_cast<std::int8_t>(i * 10 + j);
+        }
+    }
+    auto h = sam_scan::from_data(data, header);
+    h.rotate(180);
+    EXPECT_EQ(h.data()[0][0], 30);
+    EXPECT_EQ(h.data()[0][1], 31);
+    EXPECT_EQ(h.data()[0][2], 32);
+    EXPECT_EQ(h.data()[3][0], 0);
+    EXPECT_EQ(h.data()[3][1], 1);
+    EXPECT_EQ(h.data()[3][2], 2);
+}
+
 TEST(sam_scan, Rotate270Shape) {
     auto h = make_scan(3, 2, 2);
     h.rotate(270);
@@ -142,6 +162,29 @@ TEST(sam_scan, MirrorY) {
     EXPECT_EQ(h.data()[1][0], 3);
     EXPECT_EQ(h.data()[2][0], 0);
     EXPECT_EQ(h.data()[3][0], 1);
+}
+
+TEST(sam_scan, MirrorYKeepsColumnsInOrder) {
+    // Regression: mirror y swaps whole lines; the column order (and the
+    // samples of every signal) must be preserved.
+    sam_header header(2, 2, 2, 100.0, 0, 1.0); // 2 lines x 2 cols
+    array2d<std::int8_t> data(4, 2);
+    for (size_t i = 0; i < 4; ++i) {
+        for (size_t j = 0; j < 2; ++j) {
+            data[i][j] = static_cast<std::int8_t>(i * 10 + j);
+        }
+    }
+    auto h = sam_scan::from_data(data, header);
+    h.mirror(mirror_axis::y);
+    // line 0 <- line 1 (signals 20, 30), line 1 <- line 0 (signals 0, 10)
+    EXPECT_EQ(h.data()[0][0], 20);
+    EXPECT_EQ(h.data()[0][1], 21);
+    EXPECT_EQ(h.data()[1][0], 30);
+    EXPECT_EQ(h.data()[1][1], 31);
+    EXPECT_EQ(h.data()[2][0], 0);
+    EXPECT_EQ(h.data()[2][1], 1);
+    EXPECT_EQ(h.data()[3][0], 10);
+    EXPECT_EQ(h.data()[3][1], 11);
 }
 
 TEST(sam_scan, MirrorRoundTrip) {

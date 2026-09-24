@@ -92,6 +92,22 @@ def test_normalized_data():
     assert np.all(nd >= -1.0) and np.all(nd <= 127.0 / 128.0 + 1e-6)
 
 
+def test_downsample_median_matches_numpy():
+    # Regression: odd factors >= 5 used to select a non-median order
+    # statistic (nth_element at half-1, then seg[half]).
+    rng = np.random.default_rng(7)
+    data = rng.integers(-128, 127, size=(6, 60)).astype(np.int8)
+    header = SAMHeader(scanspline=1, nlines=6, scanlen=60, samplerate=1.0,
+                       tzero=0, resolution=1.0)
+    h = SAMScan.handler_from_data(data, header)
+    for factor in (3, 5, 7, 8):
+        got = np.asarray(h.downsampled(factor, "median").data)
+        n = got.shape[1]
+        ref = np.median(data[:, :n * factor].reshape(6, n, factor), axis=-1)
+        ref = np.trunc(ref).astype(np.int8)  # C++ truncates toward zero
+        np.testing.assert_array_equal(got, ref)
+
+
 @needs_data
 def test_downsample_modes():
     h = SAMScan(H5)

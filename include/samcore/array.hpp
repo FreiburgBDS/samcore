@@ -5,14 +5,16 @@
 #include <cstdint>
 #include <span>
 #include <stdexcept>
+#include <string>
 #include <utility>
 #include <vector>
 
 namespace samcore {
 
 // Non-owning view over external memory (used by the Python bindings for
-// zero-copy inputs).  Views must not be resized/filled/released; their
-// lifetime must not exceed the underlying buffer.
+// zero-copy inputs).  Views must not be resized/filled/released (enforced);
+// their lifetime must not exceed the underlying buffer.  Copying a view
+// materializes it, so value copies never alias external memory.
 struct non_owning_t {
     explicit non_owning_t() = default;
 };
@@ -21,6 +23,9 @@ inline constexpr non_owning_t non_owning{};
 // Minimal contiguous row-major 2D array.  The buffer is a single
 // std::vector so the whole contents can be exposed as raw pointers for
 // zero-copy interop with the future samcore Python package (nanobind).
+// An array is either owning (backed by buf_) or a non-owning view (ptr_);
+// all metadata, element access and comparison are storage-independent, and
+// copying a view deep-copies the elements.
 template <class T>
 class array2d {
 public:
@@ -46,16 +51,43 @@ public:
     array2d(T* data, size_t rows, size_t cols, non_owning_t)
         : rows_(rows), cols_(cols), ptr_(data) {}
 
+    // Copying an owning array copies its buffer; copying a view allocates
+    // and copies the borrowed elements (deep copy, never aliases).
+    array2d(const array2d& o) : rows_(o.rows_), cols_(o.cols_) {
+        copy_from(o);
+    }
+    array2d& operator=(const array2d& o) {
+        if (this == &o) return *this;
+        rows_ = o.rows_;
+        cols_ = o.cols_;
+        copy_from(o);
+        return *this;
+    }
+    array2d(array2d&& o) noexcept
+        : rows_(o.rows_), cols_(o.cols_), buf_(std::move(o.buf_)),
+          ptr_(o.ptr_) {
+        o.reset();
+    }
+    array2d& operator=(array2d&& o) noexcept {
+        if (this == &o) return *this;
+        rows_ = o.rows_;
+        cols_ = o.cols_;
+        buf_ = std::move(o.buf_);
+        ptr_ = o.ptr_;
+        o.reset();
+        return *this;
+    }
+    ~array2d() = default;
+
     [[nodiscard]] size_t rows() const noexcept { return rows_; }
     [[nodiscard]] size_t cols() const noexcept { return cols_; }
-    [[nodiscard]] size_t size() const noexcept { return buf_.size(); }
-    [[nodiscard]] bool empty() const noexcept { return buf_.empty(); }
+    [[nodiscard]] size_t size() const noexcept { return rows_ * cols_; }
+    [[nodiscard]] bool empty() const noexcept { return size() == 0; }
+    [[nodiscard]] bool is_view() const noexcept { return ptr_ != nullptr; }
 
-    [[nodiscard]] T* data() noexcept {
-        return buf_.empty() ? ptr_ : buf_.data();
-    }
+    [[nodiscard]] T* data() noexcept { return ptr_ ? ptr_ : buf_.data(); }
     [[nodiscard]] const T* data() const noexcept {
-        return buf_.empty() ? ptr_ : buf_.data();
+        return ptr_ ? ptr_ : buf_.data();
     }
 
     std::span<T> operator[](size_t r) noexcept {
@@ -73,19 +105,26 @@ public:
     }
 
     void resize(size_t rows, size_t cols) {
+        require_owner("resize");
         rows_ = rows;
         cols_ = cols;
         buf_.resize(checked_size(rows, cols));
     }
 
-    void fill(T v) { std::fill(buf_.begin(), buf_.end(), v); }
+    void fill(T v) {
+        require_owner("fill");
+        std::fill(buf_.begin(), buf_.end(), v);
+    }
 
     [[nodiscard]] bool operator==(const array2d& o) const {
-        return rows_ == o.rows_ && cols_ == o.cols_ && buf_ == o.buf_;
+        if (rows_ != o.rows_ || cols_ != o.cols_) return false;
+        if (size() == 0) return true;
+        return std::equal(flat().begin(), flat().end(), o.flat().begin());
     }
 
     // Take ownership of the buffer, detaching from this array.
     [[nodiscard]] std::vector<T> release() {
+        require_owner("release");
         rows_ = 0;
         cols_ = 0;
         return std::move(buf_);
@@ -97,6 +136,35 @@ private:
             throw std::overflow_error("array2d: rows*cols overflows size_t");
         }
         return rows * cols;
+    }
+
+    // Reset to a consistent empty owning state (used by move-out).
+    void reset() noexcept {
+        rows_ = 0;
+        cols_ = 0;
+        buf_.clear();
+        ptr_ = nullptr;
+    }
+
+    void require_owner(const char* what) const {
+        if (is_view()) {
+            throw std::logic_error(std::string("array2d: cannot ") + what +
+                                   " a non-owning view");
+        }
+    }
+
+    // Deep-copy o into this array, materializing views into buf_.
+    void copy_from(const array2d& o) {
+        ptr_ = nullptr;
+        if (o.is_view()) {
+            if (o.size() > 0) {
+                buf_.assign(o.data(), o.data() + o.size());
+            } else {
+                buf_.clear();
+            }
+        } else {
+            buf_ = o.buf_;
+        }
     }
 
     size_t rows_ = 0;

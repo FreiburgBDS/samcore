@@ -235,7 +235,11 @@ inline void write_2d_gzip(H5::H5File& file, const std::string& name,
     H5::DSetCreatPropList plist =
         gzip_plist(data.rows(), data.cols(), sizeof(T));
     H5::DataSet dset = file.createDataSet(name, mem_type, space, plist);
-    if (data.size() > 0) dset.write(data.data(), mem_type);
+    // Guard on shape, not on storage: a non-owning view reports its true
+    // size via rows()/cols() but would not be written by a buf_-based check.
+    if (data.rows() > 0 && data.cols() > 0) {
+        dset.write(data.data(), mem_type);
+    }
 }
 
 } // namespace samcore::io::detail

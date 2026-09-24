@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <map>
+#include <memory>
 #include <optional>
 #include <string>
 #include <utility>
@@ -13,6 +14,10 @@
 #include <samcore/sam_scan.hpp>
 
 namespace samcore {
+
+namespace io {
+struct h5samd_lazy_state; // defined in src/io/h5_lazy.hpp
+}
 
 // Spatial provenance of one sample: source cube index and pixel-centre
 // coordinates in mm (x = column, y = line), computed from the cube's
@@ -47,8 +52,14 @@ struct preprocess_args {
 class sam_dataset {
 public:
     sam_dataset() = default;
+    ~sam_dataset();
+    sam_dataset(const sam_dataset&);
+    sam_dataset& operator=(const sam_dataset&);
+    sam_dataset(sam_dataset&&) noexcept;
+    sam_dataset& operator=(sam_dataset&&) noexcept;
 
     // Deep copy of the dataset (X, labels, provenance, Z/V, splits).
+    // A mmap-mode dataset is materialized first.
     [[nodiscard]] sam_dataset copy() const;
 
     // Build from one or more scan handlers.  Signals are converted to
@@ -61,29 +72,45 @@ public:
     // IO
 
     // Save as .h5samd; throws std::invalid_argument unless the path ends
-    // with .h5samd.
+    // with .h5samd.  A mmap-mode dataset is materialized first.
     void save(const std::filesystem::path& path) const;
-    [[nodiscard]] static sam_dataset load(const std::filesystem::path& path);
+
+    // Load a .h5samd file.  With mmap = true the X/Z/V datasets stay on
+    // disk (the file handle is kept open) and are read on first data
+    // access; labels, cube shapes, resolutions and scan lengths are always
+    // loaded eagerly.
+    [[nodiscard]] static sam_dataset load(const std::filesystem::path& path,
+                                          bool mmap = false);
+
+    // Whether the data has been loaded into memory (false while a
+    // mmap-mode dataset is still backed by the on-disk HDF5 file).
+    [[nodiscard]] bool loaded() const noexcept { return lazy_ == nullptr; }
+
+    // Materialize X/Z/V (no-op when already loaded).  Every data accessor
+    // calls this implicitly.
+    void load() const { ensure_loaded(); }
 
     // accessors
 
-    [[nodiscard]] const array2d<float>& X() const noexcept { return x_; }
-    [[nodiscard]] array2d<float>& X() noexcept { return x_; }
+    // Data accessors materialize a mmap-mode dataset on first use.
+    [[nodiscard]] const array2d<float>& X() const;
+    [[nodiscard]] array2d<float>& X();
     [[nodiscard]] const std::optional<sam_labels>& labels() const noexcept {
         return labels_;
     }
     [[nodiscard]] std::optional<sam_labels>& labels() noexcept { return labels_; }
-    [[nodiscard]] const std::optional<array2d<float>>& Z() const noexcept { return z_; }
-    [[nodiscard]] std::optional<array2d<float>>& Z() noexcept { return z_; }
-    [[nodiscard]] const std::optional<array2d<float>>& V() const noexcept { return v_; }
-    [[nodiscard]] std::optional<array2d<float>>& V() noexcept { return v_; }
+    [[nodiscard]] const std::optional<array2d<float>>& Z() const;
+    [[nodiscard]] std::optional<array2d<float>>& Z();
+    [[nodiscard]] const std::optional<array2d<float>>& V() const;
+    [[nodiscard]] std::optional<array2d<float>>& V();
+    [[nodiscard]] bool has_z() const noexcept;
+    [[nodiscard]] bool has_v() const noexcept;
     [[nodiscard]] bool unsupervised() const noexcept { return unsupervised_; }
     [[nodiscard]] float pad_value() const noexcept { return pad_value_; }
-    [[nodiscard]] size_t num_samples() const noexcept { return x_.rows(); }
-    [[nodiscard]] size_t num_features() const noexcept {
-        return z_ ? z_->cols() : 0;
-    }
-    [[nodiscard]] size_t maxlen() const noexcept { return x_.cols(); }
+    // Metadata only: these never materialize a mmap-mode dataset.
+    [[nodiscard]] size_t num_samples() const noexcept;
+    [[nodiscard]] size_t num_features() const noexcept;
+    [[nodiscard]] size_t maxlen() const noexcept;
     [[nodiscard]] const std::vector<std::pair<std::int32_t, std::int32_t>>&
     cube_shapes() const noexcept { return cube_shapes_; }
     [[nodiscard]] const std::vector<double>& cube_resolutions() const noexcept {
@@ -147,18 +174,23 @@ public:
     [[nodiscard]] array2d<std::int8_t> get_cube_labels(std::int32_t idx) const;
 
 private:
-    array2d<float> x_;
+    void ensure_loaded() const;
+
+    // Data members are mutable: ensure_loaded() materializes a mmap-mode
+    // dataset through const accessors (same pattern as sam_scan::data_).
+    mutable array2d<float> x_;
     std::optional<sam_labels> labels_;
     std::vector<std::pair<std::int32_t, std::int32_t>> cube_shapes_;
     std::vector<double> cube_resolutions_;
     std::vector<std::int32_t> scanlens_;
     float pad_value_ = 0.0f;
     bool unsupervised_ = false;
-    std::optional<array2d<float>> z_;
-    std::optional<array2d<float>> v_;
+    mutable std::optional<array2d<float>> z_;
+    mutable std::optional<array2d<float>> v_;
     std::vector<std::int64_t> train_indices_;
     std::vector<std::int64_t> test_indices_;
     bool shuffled_ = false;
+    mutable std::unique_ptr<io::h5samd_lazy_state> lazy_;
 };
 
 } // namespace samcore

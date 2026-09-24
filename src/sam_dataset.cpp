@@ -2,11 +2,97 @@
 
 #include <samcore/preprocessing.hpp>
 
+#include "io/h5_lazy.hpp"
+
 #include <algorithm>
 #include <numeric>
 #include <stdexcept>
 
 namespace samcore {
+
+sam_dataset::sam_dataset(const sam_dataset& o) { *this = o; }
+
+sam_dataset& sam_dataset::operator=(const sam_dataset& o) {
+    if (this == &o) return *this;
+    o.ensure_loaded(); // a mmap-mode source is materialized once, here
+    x_ = o.x_;
+    labels_ = o.labels_;
+    cube_shapes_ = o.cube_shapes_;
+    cube_resolutions_ = o.cube_resolutions_;
+    scanlens_ = o.scanlens_;
+    pad_value_ = o.pad_value_;
+    unsupervised_ = o.unsupervised_;
+    z_ = o.z_;
+    v_ = o.v_;
+    train_indices_ = o.train_indices_;
+    test_indices_ = o.test_indices_;
+    shuffled_ = o.shuffled_;
+    lazy_.reset();
+    return *this;
+}
+
+sam_dataset::sam_dataset(sam_dataset&&) noexcept = default;
+sam_dataset& sam_dataset::operator=(sam_dataset&&) noexcept = default;
+sam_dataset::~sam_dataset() = default;
+
+void sam_dataset::ensure_loaded() const {
+    if (!lazy_) return;
+    io::h5samd_lazy_data data = io::read_h5samd_lazy_data(*lazy_);
+    x_ = std::move(data.x);
+    z_ = std::move(data.z);
+    v_ = std::move(data.v);
+    lazy_.reset(); // closes the file handle
+}
+
+const array2d<float>& sam_dataset::X() const {
+    ensure_loaded();
+    return x_;
+}
+
+array2d<float>& sam_dataset::X() {
+    ensure_loaded();
+    return x_;
+}
+
+const std::optional<array2d<float>>& sam_dataset::Z() const {
+    ensure_loaded();
+    return z_;
+}
+
+std::optional<array2d<float>>& sam_dataset::Z() {
+    ensure_loaded();
+    return z_;
+}
+
+const std::optional<array2d<float>>& sam_dataset::V() const {
+    ensure_loaded();
+    return v_;
+}
+
+std::optional<array2d<float>>& sam_dataset::V() {
+    ensure_loaded();
+    return v_;
+}
+
+bool sam_dataset::has_z() const noexcept {
+    return lazy_ ? lazy_->z.has_value() : z_.has_value();
+}
+
+bool sam_dataset::has_v() const noexcept {
+    return lazy_ ? lazy_->v.has_value() : v_.has_value();
+}
+
+size_t sam_dataset::num_samples() const noexcept {
+    return lazy_ ? lazy_->x_rows : x_.rows();
+}
+
+size_t sam_dataset::num_features() const noexcept {
+    return lazy_ ? lazy_->z_cols : (z_ ? z_->cols() : 0);
+}
+
+size_t sam_dataset::maxlen() const noexcept {
+    return lazy_ ? lazy_->x_cols : x_.cols();
+}
 
 sam_dataset::sam_dataset(std::vector<sam_scan> handlers, float pad_value,
                          std::optional<bool> unsupervised) {
@@ -19,20 +105,18 @@ sam_dataset::sam_dataset(std::vector<sam_scan> handlers, float pad_value,
     std::vector<std::pair<std::int32_t, std::int32_t>> shapes;
     std::vector<double> resolutions;
     std::vector<std::int32_t> lens;
-    std::vector<array2d<float>> parts;
+    std::vector<size_t> row_offsets(handlers.size());
 
     size_t maxlen = 0;
-    for (const auto& h : handlers) {
+    size_t total = 0;
+    for (size_t k = 0; k < handlers.size(); ++k) {
+        auto& h = handlers[k];
+        h.load(); // materialize before the parallel build below
         const size_t n = static_cast<size_t>(h.nlines() * h.cols());
         const size_t sl = static_cast<size_t>(h.scanlen());
-        array2d<float> f(n, sl);
-        for (size_t i = 0; i < n; ++i) {
-            for (size_t j = 0; j < sl; ++j) {
-                f[i][j] = static_cast<float>(h.data()[i][j]);
-            }
-        }
+        row_offsets[k] = total;
+        total += n;
         maxlen = std::max(maxlen, sl);
-        parts.push_back(std::move(f));
         shapes.emplace_back(static_cast<std::int32_t>(h.nlines()),
                             static_cast<std::int32_t>(h.cols()));
         resolutions.push_back(h.header().resolution);
@@ -44,18 +128,22 @@ sam_dataset::sam_dataset(std::vector<sam_scan> handlers, float pad_value,
     scanlens_ = std::move(lens);
     pad_value_ = pad_value;
 
-    // Pad to the common length and concatenate.
-    size_t total = 0;
-    for (const auto& p : parts) total += p.rows();
+    // Single pass: pad and convert each signal directly into its row of X.
     x_ = array2d<float>(total, maxlen);
-    size_t offset = 0;
-    for (auto& p : parts) {
-        for (size_t i = 0; i < p.rows(); ++i) {
-            auto dst = x_[offset + i];
-            std::fill(dst.begin(), dst.end(), pad_value);
-            std::copy(p[i].begin(), p[i].end(), dst.begin());
-        }
-        offset += p.rows();
+#ifdef SAMCORE_HAS_OPENMP
+#pragma omp parallel for if (total > 8) schedule(static)
+#endif
+    for (size_t r = 0; r < total; ++r) {
+        const size_t k = static_cast<size_t>(
+                             std::upper_bound(row_offsets.begin(),
+                                              row_offsets.end(), r) -
+                             row_offsets.begin()) -
+                         1;
+        const auto& h = handlers[k];
+        auto dst = x_[r];
+        std::fill(dst.begin(), dst.end(), pad_value);
+        const auto src = h.data()[r - row_offsets[k]];
+        std::copy(src.begin(), src.end(), dst.begin());
     }
 
     if (unsupervised.has_value()) {
@@ -90,34 +178,32 @@ sam_dataset::sam_dataset(std::vector<sam_scan> handlers, float pad_value,
 }
 
 sam_dataset sam_dataset::copy() const {
-    sam_dataset ds;
-    ds.x_ = x_;
-    if (labels_) {
-        ds.labels_ = labels_->copy();
-    }
-    ds.cube_shapes_ = cube_shapes_;
-    ds.cube_resolutions_ = cube_resolutions_;
-    ds.scanlens_ = scanlens_;
-    ds.pad_value_ = pad_value_;
-    ds.unsupervised_ = unsupervised_;
-    if (z_) {
-        ds.z_ = z_;
-    }
-    if (v_) {
-        ds.v_ = v_;
-    }
-    ds.train_indices_ = train_indices_;
-    ds.test_indices_ = test_indices_;
-    ds.shuffled_ = shuffled_;
-    return ds;
+    return sam_dataset(*this);
 }
 
 void sam_dataset::save(const std::filesystem::path& path) const {
+    ensure_loaded();
     io::write_h5samd(path, x_, labels_, cube_shapes_, cube_resolutions_,
                      scanlens_, unsupervised_, z_, v_);
 }
 
-sam_dataset sam_dataset::load(const std::filesystem::path& path) {
+sam_dataset sam_dataset::load(const std::filesystem::path& path, bool mmap) {
+    if (mmap) {
+        io::h5samd_lazy_handle res = io::read_h5samd_lazy(path);
+        sam_dataset ds;
+        ds.labels_ = std::move(res.labels);
+        ds.cube_shapes_ = std::move(res.cube_shapes);
+        ds.cube_resolutions_ = std::move(res.cube_resolutions);
+        ds.scanlens_ = std::move(res.scanlens);
+        ds.unsupervised_ = res.unsupervised;
+        ds.pad_value_ = 0.0f;
+        ds.lazy_ = std::move(res.data);
+        ds.train_indices_.resize(ds.num_samples());
+        std::iota(ds.train_indices_.begin(), ds.train_indices_.end(), 0);
+        ds.test_indices_.clear();
+        ds.shuffled_ = false;
+        return ds;
+    }
     io::h5samd_result res = io::read_h5samd(path);
     sam_dataset ds;
     ds.x_ = std::move(res.x);
@@ -138,7 +224,7 @@ sam_dataset sam_dataset::load(const std::filesystem::path& path) {
 
 std::vector<spatial_record> sam_dataset::spatial() const {
     std::vector<spatial_record> out;
-    out.reserve(x_.rows());
+    out.reserve(num_samples());
     for (size_t i = 0; i < cube_shapes_.size(); ++i) {
         const auto& [nlines, cols] = cube_shapes_[i];
         const size_t n = static_cast<size_t>(nlines) * cols;
@@ -164,6 +250,7 @@ size_t sam_dataset::num_classes() const {
 
 void sam_dataset::preprocess(const std::string& strategy,
                              const preprocess_args& args) {
+    ensure_loaded();
     if (strategy == "lp") {
         if (args.cutoff <= 0.0 || args.fs <= 0.0) {
             throw std::invalid_argument("'cutoff' and 'fs' are required for 'lp'.");
@@ -251,6 +338,7 @@ void cube_row_range(const sam_dataset& ds, std::int32_t idx,
 } // namespace
 
 array3d<float> sam_dataset::get_cube_X(std::int32_t idx) const {
+    ensure_loaded();
     size_t start, end;
     cube_row_range(*this, idx, start, end);
     const auto& [nlines, cols] = cube_shapes_[static_cast<size_t>(idx)];
@@ -263,6 +351,7 @@ array3d<float> sam_dataset::get_cube_X(std::int32_t idx) const {
 }
 
 array3d<float> sam_dataset::get_cube_Z(std::int32_t idx) const {
+    ensure_loaded();
     if (!z_) {
         throw std::runtime_error("Z has not been built yet.");
     }
@@ -278,6 +367,7 @@ array3d<float> sam_dataset::get_cube_Z(std::int32_t idx) const {
 }
 
 array3d<float> sam_dataset::get_cube_V(std::int32_t idx) const {
+    ensure_loaded();
     if (!v_) {
         throw std::runtime_error("V has not been set.");
     }

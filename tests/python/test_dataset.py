@@ -1480,3 +1480,68 @@ class TestConvertFromPaths:
         SAMDataset.convert_from_paths([h5_path], out, unsupervised=True)
         ds = SAMDataset.load(out)
         assert len(ds.cube_shapes) == 1
+
+
+# ── lazy (mmap) loading ─────────────────────────────────────────────────────
+
+class TestLazyLoad:
+    @staticmethod
+    def _saved(tmp_path):
+        h = _make_handler(n_signals=6, scanlen=32, cols=2)
+        ds = SAMDataset([h], unsupervised=True)
+        ds.Z = np.arange(18, dtype=np.float32).reshape(6, 3)
+        path = str(tmp_path / "lazy.h5samd")
+        ds.save(path)
+        return ds, path
+
+    def test_load_mmap_is_lazy(self, tmp_path):
+        ds, path = self._saved(tmp_path)
+        lazy = SAMDataset.load(path, mmap=True)
+        assert lazy.loaded is False
+        assert lazy.num_samples == ds.num_samples
+        assert lazy.maxlen == ds.maxlen
+        assert lazy.num_features == 3
+        assert len(lazy) == ds.num_samples
+        assert lazy.loaded is False  # metadata access did not materialize
+        np.testing.assert_array_equal(lazy.spatial, ds.spatial)
+        assert lazy.loaded is False
+
+        np.testing.assert_array_equal(lazy.X, ds.X)
+        assert lazy.loaded is True
+        np.testing.assert_array_equal(lazy.Z, ds.Z)
+
+    def test_materialize_explicit(self, tmp_path):
+        ds, path = self._saved(tmp_path)
+        lazy = SAMDataset.load(path, mmap=True)
+        lazy.materialize()
+        assert lazy.loaded is True
+        np.testing.assert_array_equal(lazy.X, ds.X)
+
+    def test_lazy_copy_and_save(self, tmp_path):
+        ds, path = self._saved(tmp_path)
+        lazy = SAMDataset.load(path, mmap=True)
+        deep = lazy.copy()
+        assert lazy.loaded is True  # copy materializes the source
+        assert deep.loaded is True
+        np.testing.assert_array_equal(deep.X, ds.X)
+
+        lazy2 = SAMDataset.load(path, mmap=True)
+        out = str(tmp_path / "lazy_rt.h5samd")
+        lazy2.save(out)
+        assert lazy2.loaded is True
+        rt = SAMDataset.load(out)
+        np.testing.assert_array_equal(rt.X, ds.X)
+
+    def test_io_read_h5samd_mmap(self, tmp_path):
+        import samcore
+
+        ds, path = self._saved(tmp_path)
+        lazy = samcore.io.read_h5samd(path, mmap=True)
+        assert lazy.loaded is False
+        np.testing.assert_array_equal(lazy.X, ds.X)
+        assert lazy.loaded is True
+
+    def test_eager_load_still_default(self, tmp_path):
+        ds, path = self._saved(tmp_path)
+        eager = SAMDataset.load(path)
+        assert eager.loaded is True

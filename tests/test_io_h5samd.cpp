@@ -132,6 +132,92 @@ TEST(sam_dataset, CubeExtraction) {
     EXPECT_FLOAT_EQ(cube.flat()[0], ds.X()[0][0]);
 }
 
+TEST(io_h5samd, MmapLazyLoad) {
+    sam_dataset ds({make_cube(2, 3, 8, 0, 1.0), make_cube(2, 3, 6, 3, 2.0)},
+                   0.0f, true);
+    ds.Z() = array2d<float>(ds.num_samples(), 2, 1.0f);
+    ds.V() = array2d<float>(ds.num_samples(), 4, 2.0f);
+
+    const std::filesystem::path out = tmp_file("samcore_ds_lazy.h5samd");
+    ds.save(out);
+
+    sam_dataset lazy = sam_dataset::load(out, true);
+    EXPECT_FALSE(lazy.loaded());
+    EXPECT_EQ(lazy.num_samples(), ds.num_samples());
+    EXPECT_EQ(lazy.maxlen(), ds.maxlen());
+    EXPECT_EQ(lazy.num_features(), ds.num_features());
+    EXPECT_TRUE(lazy.has_z());
+    EXPECT_TRUE(lazy.has_v());
+    EXPECT_EQ(lazy.cube_shapes(), ds.cube_shapes());
+    EXPECT_EQ(lazy.cube_resolutions(), ds.cube_resolutions());
+    EXPECT_EQ(lazy.scanlens(), ds.scanlens());
+    EXPECT_TRUE(lazy.unsupervised());
+    EXPECT_EQ(lazy.train_indices().size(), ds.num_samples());
+
+    // metadata-only accessors do not materialize
+    auto sp = lazy.spatial();
+    EXPECT_EQ(sp.size(), ds.num_samples());
+    EXPECT_FALSE(lazy.loaded());
+
+    // accessing data materializes it
+    EXPECT_EQ(lazy.X(), ds.X());
+    EXPECT_TRUE(lazy.loaded());
+    ASSERT_TRUE(lazy.Z().has_value());
+    EXPECT_EQ(*lazy.Z(), *ds.Z());
+    ASSERT_TRUE(lazy.V().has_value());
+    EXPECT_EQ(*lazy.V(), *ds.V());
+    std::filesystem::remove(out);
+}
+
+TEST(io_h5samd, LazyMaterializesOnCopyAndSave) {
+    sam_dataset ds({make_cube(2, 2, 8, 0, 1.0)}, 0.0f, true);
+    const std::filesystem::path out = tmp_file("samcore_ds_lazy_copy.h5samd");
+    ds.save(out);
+
+    sam_dataset lazy = sam_dataset::load(out, true);
+    ASSERT_FALSE(lazy.loaded());
+    sam_dataset deep = lazy.copy();
+    EXPECT_TRUE(lazy.loaded()); // the source was materialized by the copy
+    EXPECT_TRUE(deep.loaded());
+    EXPECT_EQ(deep.X(), ds.X());
+
+    sam_dataset lazy2 = sam_dataset::load(out, true);
+    const std::filesystem::path out2 = tmp_file("samcore_ds_lazy_rt.h5samd");
+    lazy2.save(out2);
+    EXPECT_TRUE(lazy2.loaded());
+    auto reloaded = sam_dataset::load(out2);
+    EXPECT_EQ(reloaded.X(), ds.X());
+    std::filesystem::remove(out);
+    std::filesystem::remove(out2);
+}
+
+TEST(sam_dataset, ViewInputIsMaterializedOnCopyAndSaved) {
+    sam_dataset ds({make_cube(2, 3, 8, 0, 1.0)}, 0.0f, true);
+    std::vector<float> ext(ds.num_samples() * ds.maxlen());
+    for (size_t i = 0; i < ext.size(); ++i) {
+        ext[i] = static_cast<float>(i + 1);
+    }
+    ds.X() = array2d<float>(ext.data(), ds.num_samples(), ds.maxlen(),
+                            non_owning);
+    ASSERT_TRUE(ds.X().is_view());
+
+    sam_dataset ds2 = ds.copy(); // documented deep copy
+    EXPECT_FALSE(ds2.X().is_view());
+
+    ext[0] = 123.0f;
+    EXPECT_FLOAT_EQ(ds2.X()[0][0], 1.0f); // copy did not alias
+
+    // Cube extraction and save read through the view correctly.
+    auto cube = ds.get_cube_X(0);
+    EXPECT_FLOAT_EQ(cube.flat()[0], 123.0f);
+
+    const std::filesystem::path out = tmp_file("samcore_ds_view.h5samd");
+    ds.save(out);
+    auto loaded = sam_dataset::load(out);
+    EXPECT_FLOAT_EQ(loaded.X()[0][0], 123.0f);
+    std::filesystem::remove(out);
+}
+
 TEST(sam_dataset, CubeLabels) {
     auto scan = make_cube(2, 2, 64, 0, 1.0);
     scan.set_labels({0, 1, 2, 1}, {"healthy", "defect", "other"});

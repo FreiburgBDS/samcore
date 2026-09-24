@@ -152,6 +152,28 @@ TEST(io_h5sam, PartialRowRead) {
 }
 
 
+TEST(io_h5sam, WriteNonOwningView) {
+    samcore::sam_header header(4, 3, 128, 50.0, 10, 2.5);
+    std::vector<std::int8_t> ext(12 * 128);
+    for (size_t i = 0; i < ext.size(); ++i) {
+        ext[i] = static_cast<std::int8_t>(static_cast<int>(i % 100) - 50);
+    }
+    samcore::array2d<std::int8_t> view(ext.data(), 12, 128,
+                                       samcore::non_owning);
+    samcore::sam_labels labels = samcore::sam_labels::create_unlabeled(12);
+
+    const std::filesystem::path out = tmp_file("samcore_view.h5sam");
+    samcore::io::write_h5sam(out, view, header, labels, std::nullopt);
+
+    auto loaded = sam_scan::from_file(out);
+    ASSERT_EQ(loaded.data().rows(), 12);
+    ASSERT_EQ(loaded.data().cols(), 128);
+    EXPECT_EQ(loaded.data()[5][7], ext[5 * 128 + 7]);
+    samcore::array2d<std::int8_t> expected(view); // materialized copy
+    EXPECT_EQ(loaded.data(), expected);
+    std::filesystem::remove(out);
+}
+
 TEST(io_h5sam, MmapLazyLoad) {
     if (!std::filesystem::exists(h5sam_path())) GTEST_SKIP() << "no h5sam testdata";
     // mmap mode: metadata available without loading the data
