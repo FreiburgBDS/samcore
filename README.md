@@ -1,4 +1,5 @@
 # samcore
+[![PyPI](https://img.shields.io/pypi/v/samcore)](https://pypi.org/project/samcore)
 
 **Python package and C++ library for Scanning Acoustic Microscopy (SAM) data processing.**
 
