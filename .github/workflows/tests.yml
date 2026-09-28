@@ -61,8 +61,10 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
+      # x86_64 and aarch64: the numeric kernels must agree across ISAs and
+      # libm implementations, not just on the development architecture.
       matrix:
-        os: [ubuntu-latest]
+        os: [ubuntu-latest, ubuntu-24.04-arm]
     steps:
       - uses: actions/checkout@v7
         with:
@@ -78,3 +80,28 @@ jobs:
           ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
           UBSAN_OPTIONS=halt_on_error=1 \
           ctest --test-dir build-debug --output-on-failure
+
+  # Release exercises the shipped configuration (-O2 -ffast-math -flto, see
+  # SAMCORE_ENABLE_FAST_MATH).  The IEEE Debug lane above cannot catch
+  # codegen-dependent drift (FMA contraction, reassociation, vector width),
+  # so both ISAs are tested here too.
+  cpp-tests-release:
+    name: C++ (release) on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - name: Install HDF5
+        run: sudo apt-get update && sudo apt-get -y install libhdf5-dev ninja-build
+
+      - name: Configure, build, test (release + fast-math)
+        run: |
+          cmake -B build-release -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-release
+          ctest --test-dir build-release --output-on-failure

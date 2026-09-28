@@ -344,93 +344,134 @@ std::vector<double> filtfilt(const std::vector<double>& b,
     return std::vector<double>(y.begin() + edge, y.end() - edge);
 }
 
-std::vector<double> decimate(std::span<const double> x, size_t q) {
-    if (q < 2) return std::vector<double>(x.begin(), x.end());
-    const auto sections = cheby1_sos(8, 0.05, 0.8 / static_cast<double>(q));
+namespace {
 
-    const size_t n_sections = sections.size();
+template <class T>
+std::vector<double> decimate_impl(std::span<const T> x, size_t q,
+                                  std::span<const sos> sections_in) {
+    const size_t n_sections = sections_in.size();
+    if (n_sections == 0) {
+        throw std::invalid_argument("decimate: no filter sections");
+    }
     const size_t edge = 3 * (2 * n_sections + 1);
     if (x.size() <= edge) {
         throw std::invalid_argument("decimate: input too short");
     }
-    const std::vector<double> ext = odd_ext(x, edge);
 
-    auto apply_sections = [&](std::span<const double> in,
-                              std::vector<std::array<double, 2>>& states) {
-        std::vector<double> cur(in.begin(), in.end());
-        std::vector<double> out(in.size());
-        for (size_t s = 0; s < n_sections; ++s) {
-            const sos& sec = sections[s];
-            const double inv_a0 = 1.0 / sec.a0;
-            const double a1 = sec.a1 * inv_a0;
-            const double a2 = sec.a2 * inv_a0;
-            const double b0 = sec.b0 * inv_a0;
-            const double b1 = sec.b1 * inv_a0;
-            const double b2 = sec.b2 * inv_a0;
-            double s0 = states[s][0];
-            double s1 = states[s][1];
-            for (size_t n = 0; n < in.size(); ++n) {
-                out[n] = b0 * cur[n] + s0;
-                s0 = b1 * cur[n] - a1 * out[n] + s1;
-                s1 = b2 * cur[n] - a2 * out[n];
-            }
-            states[s][0] = s0;
-            states[s][1] = s1;
-            cur.swap(out);
-        }
-        return cur;
+    struct coeffs {
+        double b0, b1, b2, a1, a2;
     };
+    std::vector<coeffs> c(n_sections);
+    std::vector<double> zi0(n_sections), zi1(n_sections);
 
     // Per-section steady-state zi (scipy sosfilt_zi parity).  Each section's
     // zi = lfilter_zi(section) scaled by the cumulative DC gain of all
     // PRECEDING sections (the signal levels grow as they pass through the
     // cascade), then the whole thing is scaled by the first input sample.
-    std::vector<std::array<double, 2>> states(n_sections, {0.0, 0.0});
     double cum_gain = 1.0;
     for (size_t s = 0; s < n_sections; ++s) {
-        const sos& sec = sections[s];
+        const sos& sec = sections_in[s];
         const double inv_a0 = 1.0 / sec.a0;
         const double b0 = sec.b0 * inv_a0, b1 = sec.b1 * inv_a0;
         const double b2 = sec.b2 * inv_a0;
         const double a1 = sec.a1 * inv_a0, a2 = sec.a2 * inv_a0;
+        c[s] = {b0, b1, b2, a1, a2};
         // lfilter_zi of the section (2x2 solve, scipy companion parity).
         const double B0 = b1 - a1 * b0;
         const double B1 = b2 - a2 * b0;
         const double z0 = (B0 + B1) / (1.0 + a1 + a2);
         const double z1 = B1 - a2 * z0;
-        states[s][0] = cum_gain * z0;
-        states[s][1] = cum_gain * z1;
+        zi0[s] = cum_gain * z0;
+        zi1[s] = cum_gain * z1;
         cum_gain *= (b0 + b1 + b2) / (1.0 + a1 + a2);
     }
 
-    // Forward pass with the steady-state initial conditions.
-    const std::vector<std::array<double, 2>> zi_states = states;
-    for (size_t s = 0; s < n_sections; ++s) {
-        states[s][0] *= ext[0];
-        states[s][1] *= ext[0];
+    // Odd extension (scipy odd_ext parity) written straight into the
+    // filtering buffer, so there is no separate extension copy.
+    const size_t n_in = x.size();
+    const size_t n_ext = n_in + 2 * edge;
+    std::vector<double> buf(n_ext);
+    const double x0 = static_cast<double>(x[0]);
+    for (size_t i = 0; i < edge; ++i) {
+        buf[i] = 2.0 * x0 - static_cast<double>(x[edge - i]);
     }
-    std::vector<double> y = apply_sections(ext, states);
-    // Backward pass: re-derive the zi from the ORIGINAL steady-state
-    // vectors scaled by the last sample of the forward output (scipy
-    // sosfiltfilt parity).
-    for (size_t s = 0; s < n_sections; ++s) {
-        states[s][0] = zi_states[s][0] * y.back();
-        states[s][1] = zi_states[s][1] * y.back();
+    for (size_t i = 0; i < n_in; ++i) {
+        buf[edge + i] = static_cast<double>(x[i]);
     }
-    std::vector<double> yrev(y.rbegin(), y.rend());
-    y = apply_sections(yrev, states);
-    std::reverse(y.begin(), y.end());
+    const double xl = static_cast<double>(x[n_in - 1]);
+    for (size_t i = 0; i < edge; ++i) {
+        buf[edge + n_in + i] =
+            2.0 * xl - static_cast<double>(x[n_in - 2 - i]);
+    }
+
+    // One pass through all sections, sample by sample (direct form II
+    // transposed): the cascade stays in cache instead of running one
+    // full-length pass per section.
+    std::vector<double> s0(n_sections), s1(n_sections);
+    const double first = buf[0];
+    for (size_t s = 0; s < n_sections; ++s) {
+        s0[s] = zi0[s] * first;
+        s1[s] = zi1[s] * first;
+    }
+    auto cascade = [&](size_t n) -> double {
+        double u = buf[n];
+        for (size_t s = 0; s < n_sections; ++s) {
+            const coeffs& cc = c[s];
+            const double y = cc.b0 * u + s0[s];
+            s0[s] = cc.b1 * u - cc.a1 * y + s1[s];
+            s1[s] = cc.b2 * u - cc.a2 * y;
+            u = y;
+        }
+        return u;
+    };
+    for (size_t n = 0; n < n_ext; ++n) {
+        buf[n] = cascade(n);
+    }
+
+    // Backward pass in place: re-running the cascade from the last sample
+    // performs the filtfilt reversal without an extra buffer or std::reverse.
+    const double last = buf[n_ext - 1];
+    for (size_t s = 0; s < n_sections; ++s) {
+        s0[s] = zi0[s] * last;
+        s1[s] = zi1[s] * last;
+    }
+    for (size_t n = n_ext; n-- > 0;) {
+        buf[n] = cascade(n);
+    }
 
     // Trim the pads, then subsample every q-th sample (scipy decimate
     // parity: y[::q] on the filtfilt output).
-    const size_t n = y.size() - 2 * edge;
-    const size_t n_out = (n + q - 1) / q;
-    std::vector<double> out;
-    out.reserve(n_out);
+    const size_t n_out = (n_in + q - 1) / q;
+    std::vector<double> out(n_out);
     for (size_t j = 0; j < n_out; ++j) {
-        out.push_back(y[edge + j * q]);
+        out[j] = buf[edge + j * q];
     }
     return out;
+}
+
+} // namespace
+
+std::vector<sos> decimate_sos(size_t q) {
+    if (q < 2) {
+        throw std::invalid_argument("decimate_sos: factor must be at least 2");
+    }
+    return cheby1_sos(8, 0.05, 0.8 / static_cast<double>(q));
+}
+
+std::vector<double> decimate(std::span<const double> x, size_t q) {
+    if (q < 2) return std::vector<double>(x.begin(), x.end());
+    const std::vector<sos> sections = decimate_sos(q);
+    return decimate_impl(x, q, sections);
+}
+
+std::vector<double> decimate(std::span<const std::int8_t> x, size_t q,
+                             std::span<const sos> sections) {
+    if (q < 2) {
+        std::vector<double> out(x.size());
+        std::copy(x.begin(), x.end(), out.begin());
+        return out;
+    }
+    return decimate_impl(x, q, sections);
 }
 
 std::vector<double> savgol_coeffs(size_t window_length, size_t polyorder) {

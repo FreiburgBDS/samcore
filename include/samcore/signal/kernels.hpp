@@ -84,9 +84,20 @@ butter_bandpass(double cutoff_low, double cutoff_high, double fs);
                                            const std::vector<double>& a,
                                            std::span<const double> x);
 
+// Design the anti-aliasing filter used by scipy.signal.decimate (Chebyshev
+// type I, order 8, 0.05 dB ripple, cutoff 0.8/q).  Exposed so callers can
+// filter many signals with one design instead of redesigning per signal.
+[[nodiscard]] std::vector<sos> decimate_sos(size_t q);
+
 // scipy.signal.decimate(x, q, ftype='iir') parity on a single signal.
 [[nodiscard]] std::vector<double> decimate(std::span<const double> x,
                                            size_t q);
+
+// int8 fast path (SAM data) with a pre-computed design; a single fused
+// cascade pass per signal, no int8->double staging buffer.
+[[nodiscard]] std::vector<double> decimate(std::span<const std::int8_t> x,
+                                           size_t q,
+                                           std::span<const sos> sections);
 
 // FIR / nonlinear
 
@@ -98,8 +109,8 @@ butter_bandpass(double cutoff_low, double cutoff_high, double fs);
 [[nodiscard]] std::vector<double> savgol_coeffs(size_t window_length,
                                                 size_t polyorder);
 
-// 1-D median filter with zero-padded edges, odd kernel (scipy.ndimage
-// semantics for medfilt).
+// 1-D median filter with reflect-padded edges, odd kernel
+// (scipy.signal.medfilt / scipy.ndimage.median_filter default 'reflect').
 [[nodiscard]] std::vector<double> medfilt1d(std::span<const double> x,
                                             size_t kernel_size);
 
