@@ -99,8 +99,9 @@ pip install .
 
 The Python package is built with scikit-build-core + nanobind; `pyproject.toml`
 configures the CMake build with `SAMCORE_BUILD_PYTHON=ON`,
-`SAMCORE_BUILD_TESTS=OFF` and `SAMCORE_BUILD_EXECUTABLES=OFF`.  Type stubs are
-generated automatically (see [Python type stubs](#python-type-stubs)).
+`SAMCORE_BUILD_TESTS=OFF`, `SAMCORE_BUILD_EXECUTABLES=OFF` and
+`SAMCORE_INSTALL_CPP=OFF`.  Type stubs are generated automatically (see
+[Python type stubs](#python-type-stubs)).
 
 If you followed the recommended Conda setup on Windows or macOS, point CMake
 at the Clang toolchain:
@@ -169,6 +170,7 @@ cmake --build build
 | `SAMCORE_BUILD_TESTS` | `ON` (top-level) | Build the googletest suite. |
 | `SAMCORE_BUILD_EXECUTABLES` | `OFF` | Build `bench` and `gen_data`. |
 | `SAMCORE_BUILD_PYTHON` | `OFF` | Build the nanobind Python extension (pip enables it). |
+| `SAMCORE_INSTALL_CPP` | `ON` | Install the C++ headers, static library and CMake package config. pip sets it to `OFF` so the wheel stays clean. |
 | `SAMCORE_ENABLE_OPENMP` | `ON` | Enable OpenMP parallelism. |
 | `SAMCORE_NATIVE_ARCH` | `OFF` | Compile with `-march=native` (local builds only). |
 | `SAMCORE_WARNINGS_AS_ERRORS` | `OFF` | Treat compiler warnings as errors. |

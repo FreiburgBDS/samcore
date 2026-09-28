@@ -20,6 +20,7 @@ endif()
 option(SAMCORE_BUILD_TESTS "Build the libsamcore test suite" ${PROJECT_IS_TOP_LEVEL})
 option(SAMCORE_BUILD_EXECUTABLES "Build executables (bench, gen_data)" OFF)
 option(SAMCORE_BUILD_PYTHON "Build the samcore Python bindings (nanobind)" OFF)
+option(SAMCORE_INSTALL_CPP "Install the C++ library, headers and CMake package" ON)
 option(SAMCORE_ENABLE_OPENMP "Enable OpenMP parallelism" ON)
 option(SAMCORE_NATIVE_ARCH "Compile with -march=native" OFF)
 option(SAMCORE_WARNINGS_AS_ERRORS "Treat warnings as errors" OFF)
@@ -123,31 +124,39 @@ set_target_properties(samcore PROPERTIES
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
 
-install(TARGETS samcore
-  EXPORT samcoreTargets
-  ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
-  LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
-  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
-install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+# The static library, its headers and the CMake package config are C++
+# development artifacts.  They are installed for standalone C++ builds, but
+# must not end up in the Python wheel: scikit-build-core maps the CMake
+# install prefix onto site-packages, so leaving this enabled would ship
+# top-level include/ and lib*/ directories in the wheel.  Wheel builds turn
+# this off via [tool.scikit-build.cmake.define] in pyproject.toml.
+if(SAMCORE_INSTALL_CPP)
+  install(TARGETS samcore
+    EXPORT samcoreTargets
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+  install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 
-install(EXPORT samcoreTargets
-  FILE samcoreTargets.cmake
-  NAMESPACE samcore::
-  DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/samcore)
+  install(EXPORT samcoreTargets
+    FILE samcoreTargets.cmake
+    NAMESPACE samcore::
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/samcore)
 
-configure_package_config_file(
-  cmake/samcoreConfig.cmake.in
-  "${CMAKE_CURRENT_BINARY_DIR}/samcoreConfig.cmake"
-  INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/samcore)
-write_basic_package_version_file(
-  "${CMAKE_CURRENT_BINARY_DIR}/samcoreConfigVersion.cmake"
-  VERSION ${PROJECT_VERSION}
-  COMPATIBILITY SameMajorVersion)
+  configure_package_config_file(
+    cmake/samcoreConfig.cmake.in
+    "${CMAKE_CURRENT_BINARY_DIR}/samcoreConfig.cmake"
+    INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/samcore)
+  write_basic_package_version_file(
+    "${CMAKE_CURRENT_BINARY_DIR}/samcoreConfigVersion.cmake"
+    VERSION ${PROJECT_VERSION}
+    COMPATIBILITY SameMajorVersion)
 
-install(FILES
-  "${CMAKE_CURRENT_BINARY_DIR}/samcoreConfig.cmake"
-  "${CMAKE_CURRENT_BINARY_DIR}/samcoreConfigVersion.cmake"
-  DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/samcore)
+  install(FILES
+    "${CMAKE_CURRENT_BINARY_DIR}/samcoreConfig.cmake"
+    "${CMAKE_CURRENT_BINARY_DIR}/samcoreConfigVersion.cmake"
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/samcore)
+endif()
 
 # ---- tests & executables ---------------------------------------------------
 if(SAMCORE_BUILD_TESTS)
