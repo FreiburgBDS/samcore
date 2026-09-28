@@ -24,11 +24,12 @@ tests/data/*
 !tests/data/testdata.h5sam
 !tests/data/testdata.h5samd
 
-# All markdown/text except README.md and version.txt
+# All markdown/text except README.md, DEVELOPMENT.md and version.txt
 *.md
 *.txt
 !version.txt
 !README.md
+!DEVELOPMENT.md
 
 # Notebooks
 *.ipynb
