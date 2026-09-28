@@ -271,16 +271,27 @@ void sam_scan::downsample(size_t factor, downsample_mode mode) {
 
     array2d<std::int8_t> downsampled(num_signals, new_len);
     if (mode == downsample_mode::decimate) {
+        if (factor < 2) {
+            for (size_t s = 0; s < num_signals; ++s) {
+                std::memcpy(downsampled[s].data(), data_[s].data(),
+                            trimmed_len);
+            }
+        } else {
+            // Design the anti-aliasing filter once, then filter every
+            // signal in one fused cascade pass (int8 input, no staging
+            // buffer).
+            const std::vector<signal::sos> sections =
+                signal::decimate_sos(factor);
 #ifdef SAMCORE_HAS_OPENMP
 #pragma omp parallel for if (num_signals > 8)
 #endif
-        for (size_t s = 0; s < num_signals; ++s) {
-            std::vector<double> row(trimmed_len);
-            for (size_t i = 0; i < trimmed_len; ++i) row[i] = data_[s][i];
-            const auto dec = signal::decimate(row, factor);
-            for (size_t i = 0; i < new_len; ++i) {
-                const double v = std::clamp(dec[i], -128.0, 127.0);
-                downsampled[s][i] = static_cast<std::int8_t>(v); // truncation
+            for (size_t s = 0; s < num_signals; ++s) {
+                const auto dec = signal::decimate(
+                    data_[s].first(trimmed_len), factor, sections);
+                for (size_t i = 0; i < new_len; ++i) {
+                    const double v = std::clamp(dec[i], -128.0, 127.0);
+                    downsampled[s][i] = static_cast<std::int8_t>(v); // truncation
+                }
             }
         }
     } else if (mode == downsample_mode::mean) {

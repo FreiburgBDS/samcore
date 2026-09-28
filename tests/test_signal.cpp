@@ -9,6 +9,63 @@
 using namespace samcore;
 using namespace samcore::signal;
 
+TEST(signal, DecimateMatchesScipy) {
+    // x[i] = (i % 7 - 3) + 0.25 * (i % 5); references generated with
+    // scipy.signal.decimate(x, q) (cheby1(8, 0.05, 0.8/q), zero phase).
+    std::vector<double> x(64);
+    for (size_t i = 0; i < x.size(); ++i) {
+        x[i] = static_cast<double>(static_cast<int>(i % 7) - 3) +
+               0.25 * static_cast<double>(i % 5);
+    }
+    const std::vector<double> expect_q2 = {
+        -2.9699878030795648, -0.62247609089086764, 2.2456443225503264,
+        1.2301675666009513, -1.3352379766343991, 0.22702727534005168,
+        2.8024114706684, -0.33810202401937933, -1.6252884379870944,
+        2.6431145785569852, 1.2440057390472243, -1.7101556631615309,
+        0.70004708517900394, 2.3658203020176147, -0.12727940280753591,
+        -1.535432681861626, 2.3079189865552889, 1.6807073716192471,
+        -2.0736268888089984, 0.85012700507989214, 2.4828958201791003,
+        -0.45817283487197319, -1.1306981003235979, 1.9990870738318836,
+        1.7658585516611307, -1.9090768241655294, 0.51598091783322797,
+        2.8631247880142459, -0.63112841893137628, -1.2454351155855574,
+        2.4757195393747282, 1.1701950723716872};
+    const std::vector<double> expect_q5 = {
+        -2.9614181885079924, 1.236551675232203, 0.252413704454232,
+        0.55443073093767536, 0.59543989687743459, 0.37464500888444408,
+        0.64629847941177376, 0.44137808132587392, 0.48148575877977406,
+        0.64582685167757981, 0.2621387976145077, 0.83316599604173747,
+        0.16584556711563594};
+    for (auto [q, expect] :
+         std::initializer_list<std::pair<size_t, const std::vector<double>*>>{
+             {2, &expect_q2}, {5, &expect_q5}}) {
+        const auto y = decimate(std::span<const double>(x), q);
+        ASSERT_EQ(y.size(), expect->size());
+        for (size_t i = 0; i < y.size(); ++i) {
+            EXPECT_NEAR(y[i], (*expect)[i], 1e-11);
+        }
+    }
+}
+
+TEST(signal, DecimateInt8MatchesDouble) {
+    std::vector<std::int8_t> xi(200);
+    for (size_t i = 0; i < xi.size(); ++i) {
+        xi[i] = static_cast<std::int8_t>(
+            static_cast<int>((i * 7 + 13) % 255) - 127);
+    }
+    std::vector<double> xd(xi.begin(), xi.end());
+    const auto sections = decimate_sos(5);
+    const auto yd = decimate(std::span<const double>(xd), 5);
+    const auto yi = decimate(std::span<const std::int8_t>(xi), 5, sections);
+    ASSERT_EQ(yi.size(), yd.size());
+    for (size_t i = 0; i < yi.size(); ++i) {
+        EXPECT_NEAR(yi[i], yd[i], 1e-12);
+    }
+    // q < 2 is an identity copy; decimate_sos rejects it.
+    EXPECT_THROW((void)decimate_sos(1), std::invalid_argument);
+    const auto y1 = decimate(std::span<const double>(xd), 1);
+    EXPECT_EQ(y1, xd);
+}
+
 TEST(signal, RfftOfImpulse) {
     std::vector<double> x(8, 0.0);
     x[0] = 1.0;
