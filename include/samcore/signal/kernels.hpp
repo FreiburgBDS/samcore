@@ -109,8 +109,8 @@ butter_bandpass(double cutoff_low, double cutoff_high, double fs);
 [[nodiscard]] std::vector<double> savgol_coeffs(size_t window_length,
                                                 size_t polyorder);
 
-// 1-D median filter with zero-padded edges, odd kernel (scipy.ndimage
-// semantics for medfilt).
+// 1-D median filter with reflect-padded edges, odd kernel
+// (scipy.signal.medfilt / scipy.ndimage.median_filter default 'reflect').
 [[nodiscard]] std::vector<double> medfilt1d(std::span<const double> x,
                                             size_t kernel_size);
 
