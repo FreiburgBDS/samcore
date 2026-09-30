@@ -238,6 +238,16 @@ pip install ".[test]"
 pytest tests/python
 ```
 
+The optional PyTorch interop tests (`tests/python/test_torch_interop.py`)
+require torch and skip cleanly without it.  The CPU-only wheel keeps the
+download small:
+
+```sh
+pip install torch --index-url https://download.pytorch.org/whl/cpu
+# or, via the optional extra: pip install ".[test,test-torch]"
+pytest tests/python
+```
+
 To run the Python extension under sanitizers, install the Debug configuration
 and preload the ASan runtime:
 

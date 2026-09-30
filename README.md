@@ -25,15 +25,23 @@ C-scan images, spectra and ready-to-train machine-learning datasets.
 - **Signal processing**: built-in strategies `lp`, `bp`, `normalize`,
   `savgol`, `medfilt`, `gate`, `detrend`, `envelope` and `moving_average`.
 - **Spectral analysis**: one-sided STFT, Welch PSD and per-frame power
-  spectrograms of every A-scan.
-- **Cube manipulation**: downsample, rotate, mirror, rectangular/time-range
+  spectrograms of every A-scan, with optional `f_min`/`f_max` band limits;
+  batched `scan.spectrum()` FFT magnitudes and `stft_peak_frequency()` /
+  `stft_peak_time()` reduction images.
+- **Cube manipulation**: downsample, rotate, mirror, rectangular/sample/time
   selection and Z-gating, all with in-place and copy variants.
 - **Labels**: per-scan class labels (`SAMLabels`) with label names, masks
-  (healthy/labeled/unlabeled) and class distributions.
+  (healthy/labeled/unlabeled), class distributions and registry editing
+  (`add_label`, `rename_label`, `delete_label`).
 - **Datasets for ML**: pool one or more cubes into a padded `SAMDataset`,
   merge labels, split train/test (random, stratified, or by cube), apply
   feature transforms (`Z`) and iterate minibatches or spatial patches.
-- **Fast C++ core**: the same functionality is available from C++ as `libsamcore`, parallelized with OpenMP.
+- **Interop**: `np.asarray(scan)`, `np.asarray(dataset)` and
+  `np.asarray(labels)` work through the NumPy `__array__` protocol
+  (zero-copy when no dtype conversion is requested); the optional
+  `samcore.interop` helpers (`tensor`, `TorchDataset`, `TorchDataLoader`)
+  import PyTorch lazily and are never required by `import samcore`.
+- **Fast C++ core**: the same functionality is available from C++ as `libsamcore`, parallelized with OpenMP; long-running operations release the Python GIL.
 
 ### File formats
 
@@ -66,6 +74,8 @@ for training and analysis:
 - `Z`: an optional feature matrix, and `V` an optional low-dimensional
   embedding.
 
+Both formats carry a `samcore_format_version` attribute on the file root.
+
 ## Installation
 
 ```sh
@@ -78,8 +88,8 @@ To build from source instead, see [DEVELOPMENT.md](https://github.com/FreiburgBD
 ```python
 import samcore
 
-# Load one acquisition grid; mmap=True keeps the signals on disk until first use.
-scan = samcore.SAMScan("cell.h5sam", mmap=True)
+# Load one acquisition grid
+scan = samcore.SAMScan("cell.h5sam")
 
 print(scan.header.cellid, scan.nlines, scan.cols, scan.scanlen)
 print("time axis [ns]:", scan.time()[:5])
