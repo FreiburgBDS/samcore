@@ -163,7 +163,9 @@ stft_result stft(const array2d<float>& data, double fs, size_t nperseg,
     const size_t nframes = (n - nperseg) / step + 1;
     const size_t nfreqs = nperseg / 2 + 1;
     const auto all_f = rfftfreq(nperseg, 1.0 / fs);
-    const auto [k0, k1] = band_bins(all_f, f_min, f_max);
+    const std::pair<size_t, size_t> band = band_bins(all_f, f_min, f_max);
+    const size_t k0 = band.first;
+    const size_t k1 = band.second;
     const size_t nkept = k1 - k0;
     const auto win_d = hann_window(nperseg);
     std::vector<float> win(win_d.begin(), win_d.end());
@@ -214,7 +216,9 @@ psd_result welch_psd(const array2d<float>& data, double fs, size_t nperseg,
     const size_t nframes = (n - nperseg) / step + 1;
     const size_t nfreqs = nperseg / 2 + 1;
     const auto all_f = rfftfreq(nperseg, 1.0 / fs);
-    const auto [k0, k1] = band_bins(all_f, f_min, f_max);
+    const std::pair<size_t, size_t> band = band_bins(all_f, f_min, f_max);
+    const size_t k0 = band.first;
+    const size_t k1 = band.second;
     const size_t nkept = k1 - k0;
     const auto win_d = hann_window(nperseg);
     std::vector<float> win(win_d.begin(), win_d.end());
@@ -273,7 +277,9 @@ spectrogram_result spectrogram_psd(const array2d<float>& data, double fs,
     const size_t nframes = (n - nperseg) / step + 1;
     const size_t nfreqs = nperseg / 2 + 1;
     const auto all_f = rfftfreq(nperseg, 1.0 / fs);
-    const auto [k0, k1] = band_bins(all_f, f_min, f_max);
+    const std::pair<size_t, size_t> band = band_bins(all_f, f_min, f_max);
+    const size_t k0 = band.first;
+    const size_t k1 = band.second;
     const size_t nkept = k1 - k0;
     const auto win_d = hann_window(nperseg);
     std::vector<float> win(win_d.begin(), win_d.end());
@@ -327,7 +333,9 @@ stft_peaks_result stft_peaks(const array2d<float>& data, double fs,
     const size_t nframes = (n - nperseg) / step + 1;
     const size_t nfreqs = nperseg / 2 + 1;
     const auto all_f = rfftfreq(nperseg, 1.0 / fs);
-    const auto [k0, k1] = band_bins(all_f, f_min, f_max);
+    const std::pair<size_t, size_t> band = band_bins(all_f, f_min, f_max);
+    const size_t k0 = band.first;
+    const size_t k1 = band.second;
     const size_t nkept = k1 - k0;
     const auto times = frame_times(n, nperseg, step, fs);
     const auto win_d = hann_window(nperseg);
