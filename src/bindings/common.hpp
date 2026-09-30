@@ -102,19 +102,6 @@ auto without_gil(F&& f) -> decltype(f()) {
     return f();
 }
 
-// Resolve the lazy flag from the new `lazy=` argument and the deprecated
-// `mmap=` alias.  samcore cannot memory-map chunked/compressed HDF5 data, so
-// `mmap=` warns and maps to lazy reading.
-inline bool lazy_flag(bool lazy, nb::object mmap) {
-    if (mmap.is_none()) return lazy;
-    nb::module_ warnings = nb::module_::import_("warnings");
-    warnings.attr("warn")(
-        "mmap= is deprecated: samcore cannot memory-map chunked/compressed "
-        "HDF5 data and reads it lazily instead. Use lazy= instead.",
-        nb::handle(PyExc_DeprecationWarning));
-    return nb::cast<bool>(mmap);
-}
-
 template <typename T>
 array2d<T> copy_in(nb::ndarray<const T, nb::numpy, nb::ndim<2>, nb::c_contig> a) {
     array2d<T> out(a.shape(0), a.shape(1));

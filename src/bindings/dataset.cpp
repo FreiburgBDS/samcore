@@ -57,16 +57,12 @@ nb::class_<sam_dataset>(m, "SAMDataset", nb::dynamic_attr(),
                      "are required.  None (default) auto-detects: supervised "
                      "only when all scans are labeled.")
         .def_static("load",
-                    [](const std::string& path, bool lazy, nb::object mmap) {
-                        // Resolve the alias before releasing the GIL: emitting
-                        // the DeprecationWarning touches Python.
-                        const bool use_lazy = lazy_flag(lazy, mmap);
+                    [](const std::string& path, bool lazy) {
                         return without_gil([&] {
-                            return sam_dataset::load(path, use_lazy);
+                            return sam_dataset::load(path, lazy);
                         });
                     },
                     nb::arg("path"), nb::arg("lazy") = false,
-                    nb::arg("mmap") = nb::none(),
            "Load a dataset from a .h5samd file.\n\n"
            "Parameters\n"
            "----------\n"
@@ -75,11 +71,7 @@ nb::class_<sam_dataset>(m, "SAMDataset", nb::dynamic_attr(),
            "lazy : bool, optional\n"
            "    With True X/Z/V stay on disk and are decoded in cached row "
            "blocks on demand (paged lazy reading, not memory mapping); "
-           "metadata is always loaded eagerly.\n"
-           "mmap : bool, optional\n"
-           "    Deprecated alias of ``lazy``; emits a DeprecationWarning "
-           "because memory mapping is not possible for compressed HDF5 "
-           "data.")
+           "metadata is always loaded eagerly.")
         .def_prop_ro("loaded", [](const sam_dataset& d) { return d.loaded(); },
                      "Whether the dataset data has been loaded into memory "
                      "(false in lazy mode until materialized).")

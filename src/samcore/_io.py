@@ -65,8 +65,7 @@ class io:
         _io.write_h5sam(path, data, header, samlabels, starts)
 
     @staticmethod
-    def read_h5samd(path: str, lazy: bool = False,
-                    mmap: Optional[bool] = None) -> SAMDataset:
+    def read_h5samd(path: str, lazy: bool = False) -> SAMDataset:
         """Read a .h5samd file as a :class:`SAMDataset`.
 
         Parameters
@@ -77,16 +76,13 @@ class io:
             With True X/Z/V stay on disk and are decoded in cached row blocks
             on demand (paged lazy reading, not memory mapping); metadata is
             always loaded eagerly.
-        mmap : bool or None, optional
-            Deprecated alias of ``lazy``; emits a DeprecationWarning because
-            memory mapping is not possible for compressed HDF5 data.
 
         Returns
         -------
         SAMDataset
             The loaded dataset.
         """
-        return _io.read_h5samd(path, lazy=lazy, mmap=mmap)
+        return _io.read_h5samd(path, lazy=lazy)
 
     @staticmethod
     def convert_h5sam_to_h5samd(input_paths: List[str], output_path: str,

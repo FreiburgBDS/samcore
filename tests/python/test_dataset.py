@@ -1639,17 +1639,15 @@ class TestLazyLoad:
         np.testing.assert_array_equal(batches[1][0], ds.Z[3:])
         assert lazy.loaded is False
 
-    def test_mmap_alias_warns(self, tmp_path):
-        ds, path = self._saved(tmp_path)
-        with pytest.warns(DeprecationWarning, match="mmap= is deprecated"):
-            lazy = SAMDataset.load(path, mmap=True)
-        assert lazy.backing == "lazy"
-        assert lazy.loaded is False
-        with pytest.warns(DeprecationWarning, match="mmap= is deprecated"):
+    def test_mmap_is_not_supported(self, tmp_path):
+        # mmap= was removed outright (no memory mapping for compressed HDF5).
+        _ds, path = self._saved(tmp_path)
+        with pytest.raises(TypeError):
+            SAMDataset.load(path, mmap=True)
+        with pytest.raises(TypeError):
             import samcore
 
-            lazy2 = samcore.io.read_h5samd(path, mmap=True)
-        assert lazy2.backing == "lazy"
+            samcore.io.read_h5samd(path, mmap=True)
 
     def test_materialize_explicit(self, tmp_path):
         ds, path = self._saved(tmp_path)

@@ -608,13 +608,13 @@ class TestLazyLoading:
         assert handler.loaded is False
 
     @needs_data
-    def test_mmap_alias_warns(self):
-        with pytest.warns(DeprecationWarning, match="mmap= is deprecated"):
-            handler = SAMScan(H5_PATH, mmap=True)
-        assert handler.backing == "lazy"
-        with pytest.warns(DeprecationWarning, match="mmap= is deprecated"):
-            from_file = SAMScan.from_file(H5_PATH, mmap=True)
-        assert from_file.backing == "lazy"
+    def test_mmap_is_not_supported(self):
+        # mmap= was removed outright: the data is chunked + compressed, so
+        # there is no memory mapping to opt into.
+        with pytest.raises(TypeError):
+            SAMScan(H5_PATH, mmap=True)
+        with pytest.raises(TypeError):
+            SAMScan.from_file(H5_PATH, mmap=True)
 
     @needs_data
     def test_lazy_copy_is_deep(self):

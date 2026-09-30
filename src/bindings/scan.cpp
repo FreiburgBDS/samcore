@@ -30,12 +30,10 @@ void bind_scan(nb::module_& m) {
                                  "data).")
         .def(nb::init<>())
         .def("__init__",
-             [](sam_scan* self, const std::string& path, bool lazy,
-                nb::object mmap) {
-                 new (self) sam_scan(path, lazy_flag(lazy, mmap));
+             [](sam_scan* self, const std::string& path, bool lazy) {
+                 new (self) sam_scan(path, lazy);
              },
              nb::arg("path"), nb::arg("lazy") = false,
-             nb::arg("mmap") = nb::none(),
              "Load a SAM scan from a .h5sam file.\n\n"
                      "Parameters\n"
                      "----------\n"
@@ -46,18 +44,12 @@ void bind_scan(nb::module_& m) {
                      "decoded in cached row blocks on demand; header, labels "
                      "and starts are always loaded eagerly.  The data is "
                      "chunked and compressed, so this is paged lazy reading, "
-                     "not memory mapping.\n"
-                     "mmap : bool, optional\n"
-                     "    Deprecated alias of ``lazy``; emits a "
-                     "DeprecationWarning because memory mapping is not "
-                     "possible for compressed HDF5 data.")
+                     "not memory mapping.")
         .def_static("from_file",
-                    [](const std::string& path, bool lazy, nb::object mmap) {
-                        return sam_scan::from_file(path,
-                                                   lazy_flag(lazy, mmap));
+                    [](const std::string& path, bool lazy) {
+                        return sam_scan::from_file(path, lazy);
                     },
                     nb::arg("path"), nb::arg("lazy") = false,
-                    nb::arg("mmap") = nb::none(),
                     "Load a SAM scan from a .h5sam file.\n\n"
                             "Parameters\n"
                             "----------\n"
@@ -66,10 +58,7 @@ void bind_scan(nb::module_& m) {
                             "lazy : bool, optional\n"
                             "    Keep the signal data on disk and decode it "
                             "in cached row blocks on demand (paged lazy "
-                            "reading; not memory mapping).\n"
-                            "mmap : bool, optional\n"
-                            "    Deprecated alias of ``lazy``; emits a "
-                            "DeprecationWarning.")
+                            "reading; not memory mapping).")
         .def_static("from_data",
                     [](in_i8_2 data, sam_header header,
                        std::optional<std::vector<std::int32_t>> starts,

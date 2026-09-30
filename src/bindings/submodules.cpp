@@ -342,21 +342,17 @@ void bind_submodules(nb::module_& m) {
            "Write an int8 signal array plus header, labels and "
                    "optional starts to a .h5sam file.");
     io.def("read_h5samd",
-           [](const std::string& path, bool lazy, nb::object mmap) {
-               // Resolve the alias before releasing the GIL: emitting the
-               // DeprecationWarning touches Python.
-               const bool use_lazy = lazy_flag(lazy, mmap);
+           [](const std::string& path, bool lazy) {
                return without_gil([&] {
-                   return sam_dataset::load(path, use_lazy);
+                   return sam_dataset::load(path, lazy);
                });
            },
            nb::arg("path"), nb::arg("lazy") = false,
-           nb::arg("mmap") = nb::none(),
-       nb::sig("def read_h5samd(path: str, lazy: bool = False, mmap: bool | None = None) -> SAMDataset"),
+       nb::sig("def read_h5samd(path: str, lazy: bool = False) -> SAMDataset"),
        "Read a .h5samd file as a :class:`SAMDataset`.\n\n"
                "With ``lazy=True`` X/Z/V stay on disk and are decoded in "
                "cached row blocks on demand (paged lazy reading, not memory "
-               "mapping).  ``mmap`` is a deprecated alias of ``lazy``.");
+               "mapping).");
     io.def("convert_h5sam_to_h5samd",
            [](const std::vector<std::string>& input_paths,
               const std::string& output_path, float pad_value,
