@@ -20,19 +20,20 @@ TEST(sam_header, ConstructorAndDefaults) {
 
 TEST(sam_header, TimeAxis) {
     sam_header h(1, 1, 4, 1000.0, 100, 1.0);
-    // linspace(tzero, tzero + scanlen/samplerate*1e3, scanlen)
+    // end-exclusive: t[i] = tzero + i / samplerate * 1e3
     auto t = h.time();
     ASSERT_EQ(t.size(), 4);
     EXPECT_DOUBLE_EQ(t[0], 100.0);
-    EXPECT_DOUBLE_EQ(t[3], 104.0);
+    EXPECT_DOUBLE_EQ(t[1], 101.0);
+    EXPECT_DOUBLE_EQ(t[3], 103.0);
 }
 
 TEST(sam_header, TimeAxisWithRange) {
     sam_header h(1, 1, 100, 100.0, 0, 1.0);
     auto t = h.time(10, 20);
     ASSERT_EQ(t.size(), 10);
-    EXPECT_DOUBLE_EQ(t[0], 100.0); // 10 ns/sample
-    EXPECT_DOUBLE_EQ(t[9], 200.0); // endpoint = tzero + end/samplerate*1e3
+    EXPECT_DOUBLE_EQ(t[0], 100.0); // 10 ns/sample, first sample index 10
+    EXPECT_DOUBLE_EQ(t[9], 190.0); // last sample index 19, end exclusive
 }
 
 TEST(sam_header, Equality) {

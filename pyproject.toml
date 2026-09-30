@@ -27,6 +27,7 @@ authors = [
 
 [project.optional-dependencies]
 test = ["pytest"]
+test-torch = ["torch"]
 
 [tool.scikit-build]
 cmake.source-dir = "."

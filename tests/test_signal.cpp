@@ -155,7 +155,10 @@ TEST(signal, SavgolCoeffsKnown) {
 TEST(signal, Medfilt1dKnown) {
     std::vector<double> x{0, 3, 1, 2, 9, 1, 4, 5, 7};
     auto y = medfilt1d(x, 3);
-    // scipy.signal.medfilt(x, 3): reflect-padded edges
+    // Whole-sample reflect padding (numpy.pad mode='reflect'), i.e. the
+    // window at index 0 is [x[1], x[0], x[1]].  This is NOT
+    // scipy.signal.medfilt, which zero-pads (and would return y[0] == 0);
+    // the interior samples do match scipy.
     EXPECT_NEAR(y[0], 3.0, 1e-12);
     EXPECT_NEAR(y[1], 1.0, 1e-12);
     EXPECT_NEAR(y[2], 2.0, 1e-12);
@@ -184,5 +187,102 @@ TEST(signal, StftWindowSumNormalization) {
     array2d<float> data(1, 256, 42.0f);
     auto res = stft(data, 100.0, 256, 128);
     EXPECT_NEAR(res.zxx.flat()[0].real(), 42.0f, 1e-3);
+}
+
+TEST(signal, StftBandSelectionMatchesSlicedFull) {
+    array2d<float> data(2, 1000);
+    for (size_t i = 0; i < data.rows(); ++i) {
+        for (size_t j = 0; j < data.cols(); ++j) {
+            data[i][j] = static_cast<float>(
+                std::sin(0.05 * static_cast<double>(j)) +
+                0.1 * static_cast<double>(i));
+        }
+    }
+    const auto full = stft(data, 1000.0, 256, 128);
+    const auto band = stft(data, 1000.0, 256, 128, 100.0, 300.0);
+    ASSERT_GT(band.f.size(), 0u);
+    size_t k0 = 0;
+    while (full.f[k0] < band.f.front()) ++k0;
+    ASSERT_EQ(band.zxx.size1(), band.f.size());
+    ASSERT_EQ(band.zxx.size2(), full.zxx.size2());
+    for (size_t sig = 0; sig < data.rows(); ++sig) {
+        for (size_t k = 0; k < band.f.size(); ++k) {
+            EXPECT_FLOAT_EQ(band.f[k], full.f[k0 + k]);
+            for (size_t fr = 0; fr < band.zxx.size2(); ++fr) {
+                const auto a =
+                    band.zxx.flat()[(sig * band.f.size() + k) *
+                                        band.zxx.size2() +
+                                    fr];
+                const auto b =
+                    full.zxx.flat()[(sig * full.f.size() + (k0 + k)) *
+                                        full.zxx.size2() +
+                                    fr];
+                EXPECT_NEAR(a.real(), b.real(), 1e-6f);
+                EXPECT_NEAR(a.imag(), b.imag(), 1e-6f);
+            }
+        }
+    }
+    // invalid bands throw
+    EXPECT_THROW((void)stft(data, 1000.0, 256, 128, 300.0, 100.0),
+                 std::invalid_argument);
+    EXPECT_THROW((void)stft(data, 1000.0, 256, 128, 0.0, 5000.0),
+                 std::invalid_argument);
+    EXPECT_THROW((void)stft(data, 1000.0, 256, 128, 4000.0, 0.0),
+                 std::invalid_argument);
+}
+
+TEST(signal, StftPeaksMatchTones) {
+    // fs = 1000 Hz, nperseg = 256 -> bin spacing 3.90625 Hz; use exact bins
+    // (k = 32 -> 125 Hz, k = 64 -> 250 Hz).
+    constexpr double pi = 3.14159265358979323846;
+    array2d<float> data(2, 1000);
+    for (size_t j = 0; j < data.cols(); ++j) {
+        const double t = static_cast<double>(j) / 1000.0;
+        data[0][j] = static_cast<float>(
+            100.0 * std::sin(2.0 * pi * 125.0 * t) +
+            40.0 * std::sin(2.0 * pi * 250.0 * t));
+        data[1][j] =
+            static_cast<float>(100.0 * std::sin(2.0 * pi * 250.0 * t));
+    }
+    const auto full = stft_peaks(data, 1000.0, 256, 128);
+    EXPECT_NEAR(full.peak_frequency[0], 125.0f, 4.0f);
+    EXPECT_NEAR(full.peak_frequency[1], 250.0f, 4.0f);
+    EXPECT_GE(full.peak_time[0], 0.0f);
+    EXPECT_LE(full.peak_time[0], 1.0f);
+
+    const auto band = stft_peaks(data, 1000.0, 256, 128, 200.0, 300.0);
+    EXPECT_NEAR(band.peak_frequency[0], 250.0f, 4.0f);
+    EXPECT_NEAR(band.peak_frequency[1], 250.0f, 4.0f);
+}
+
+TEST(signal, XcorrLagRecoversKnownShift) {
+    // Deterministic pseudo-random int8 reference; x is ref delayed by d,
+    // i.e. x[i] = ref[i - d] (zero-filled outside the buffer).
+    std::vector<std::int8_t> ref(128);
+    for (size_t i = 0; i < ref.size(); ++i) {
+        ref[i] = static_cast<std::int8_t>(
+            static_cast<int>((i * 37 + 11) % 200) - 100);
+    }
+    for (std::int64_t d : {-17, -3, 0, 5, 23}) {
+        std::vector<std::int8_t> x(ref.size(), 0);
+        for (size_t i = 0; i < x.size(); ++i) {
+            const std::int64_t k = static_cast<std::int64_t>(i) - d;
+            if (k >= 0 && k < static_cast<std::int64_t>(ref.size())) {
+                x[i] = ref[static_cast<size_t>(k)];
+            }
+        }
+        EXPECT_EQ(xcorr_lag(x, ref, 40), d) << "d=" << d;
+    }
+}
+
+TEST(signal, XcorrLagValidation) {
+    std::vector<std::int8_t> ref(64, 1);
+    std::vector<std::int8_t> shorter(32, 1);
+    EXPECT_THROW((void)xcorr_lag(ref, shorter, 10), std::invalid_argument);
+    EXPECT_THROW((void)xcorr_lag(std::span<const std::int8_t>{},
+                                 std::span<const std::int8_t>{}, 0),
+                 std::invalid_argument);
+    // max_shift beyond the signal length is clamped, not an error
+    EXPECT_EQ(xcorr_lag(ref, ref, 1000), 0);
 }
 

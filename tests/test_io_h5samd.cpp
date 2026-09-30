@@ -2,6 +2,8 @@
 
 #include <filesystem>
 
+#include <H5Cpp.h>
+
 #include <samcore/sam_dataset.hpp>
 
 namespace {
@@ -288,4 +290,33 @@ TEST(sam_dataset, CopyPreservesZAndLabels) {
     EXPECT_EQ(c.labels()->label_names(), ds.labels()->label_names());
     ASSERT_TRUE(c.Z().has_value());
     EXPECT_EQ(*c.Z(), *ds.Z());
+}
+
+TEST(io_h5samd, FormatVersionAttributes) {
+    sam_dataset ds({make_cube(2, 2, 8, 0, 1.0)}, 0.0f, true);
+    const std::filesystem::path out = tmp_file("samcore_ds_version.h5samd");
+    ds.save(out);
+
+    {
+        H5::H5File f(out.string(), H5F_ACC_RDONLY);
+        ASSERT_TRUE(f.attrExists("samcore_format_version"));
+        std::int64_t v = 0;
+        f.openAttribute("samcore_format_version")
+            .read(H5::PredType::NATIVE_INT64, &v);
+        EXPECT_EQ(v, 1);
+        EXPECT_TRUE(f.attrExists("samcore_version"));
+    }
+
+    // A file from a newer library warns but still loads (eager and lazy).
+    {
+        H5::H5File rw(out.string(), H5F_ACC_RDWR);
+        H5::Attribute a = rw.openAttribute("samcore_format_version");
+        const std::int64_t future = 999;
+        a.write(H5::PredType::NATIVE_INT64, &future);
+    }
+    auto loaded = sam_dataset::load(out);
+    EXPECT_EQ(loaded.X(), ds.X());
+    auto lazy = sam_dataset::load(out, true);
+    EXPECT_EQ(lazy.X(), ds.X());
+    std::filesystem::remove(out);
 }

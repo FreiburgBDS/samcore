@@ -38,11 +38,12 @@ TEST(utils, KurtOfGaussianApprox) {
 }
 
 TEST(utils, TimeIndex) {
+    // End-exclusive, sample-spaced: tzero + i * delta_t.
     auto t = time_index(100.0, 10.0, 5);
     ASSERT_EQ(t.size(), 5);
     EXPECT_DOUBLE_EQ(t[0], 100.0);
-    EXPECT_DOUBLE_EQ(t[4], 110.0);
-    EXPECT_DOUBLE_EQ(t[2], 105.0);
+    EXPECT_DOUBLE_EQ(t[2], 120.0);
+    EXPECT_DOUBLE_EQ(t[4], 140.0);
 }
 
 TEST(utils, FftSpec) {
@@ -53,6 +54,29 @@ TEST(utils, FftSpec) {
     ASSERT_EQ(freqs.size(), 65);
     EXPECT_NEAR(mag[0], 1.0, 1e-12);
     EXPECT_NEAR(freqs[1], 1.0 / 128.0, 1e-15);
+}
+
+TEST(utils, FftSpectrumMatchesSingleSignal) {
+    array2d<float> d(3, 32);
+    for (size_t i = 0; i < d.rows(); ++i) {
+        for (size_t j = 0; j < d.cols(); ++j) {
+            d[i][j] = static_cast<float>(
+                std::sin(0.2 * static_cast<double>(j)) +
+                0.1 * static_cast<double>(i));
+        }
+    }
+    auto [mag, freqs] = fft_spectrum(d, 1.0);
+    ASSERT_EQ(mag.rows(), 3u);
+    ASSERT_EQ(mag.cols(), 17u);
+    ASSERT_EQ(freqs.size(), 17u);
+    for (size_t i = 0; i < d.rows(); ++i) {
+        std::vector<float> row(d[i].begin(), d[i].end());
+        auto [m1, f1] = fft_spec(row, 1.0);
+        for (size_t k = 0; k < mag.cols(); ++k) {
+            EXPECT_NEAR(mag[i][k], m1[k], 1e-5) << "row " << i << " bin " << k;
+            EXPECT_FLOAT_EQ(freqs[k], static_cast<float>(f1[k]));
+        }
+    }
 }
 
 TEST(utils, SpectralEntropyBasic) {

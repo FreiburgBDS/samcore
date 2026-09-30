@@ -218,14 +218,17 @@ def test_rectangle_select_metadata_both_paths() -> None:
         np.testing.assert_array_equal(r.starts, starts_before[idx])
 
 
-def test_time_range_select_drops_starts_both_paths() -> None:
+def test_time_range_select_preserves_starts_both_paths() -> None:
     for in_place in (False, True):
         h = _make_handler()
         before = h.data.copy()
+        starts_before = np.array(h.starts, copy=True)
         tz, sp = h.header.tzero, h.samplespacing
         r = h.time_range_select(tz + sp * 10, tz + sp * 70, in_place=in_place)
-        assert r.starts is None
         np.testing.assert_array_equal(r.data, before[:, 10:70])
+        # valid starts advance by the slice offset; tzero is unchanged
+        np.testing.assert_array_equal(r.starts, starts_before + 10)
+        assert r.header.tzero == h.header.tzero
 
 
 @needs_data

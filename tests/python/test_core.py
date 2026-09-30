@@ -7,6 +7,7 @@ labels, copy semantics and header round trips.
 import numpy as np
 import pytest
 
+import samcore
 from samcore import SAMHeader, SAMLabels, SAMScan
 
 from conftest import H5_PATH, needs_data
@@ -31,10 +32,46 @@ def test_integrity(h5):
 def test_time_index(h5):
     time_index = h5.timescale
     assert len(time_index) == h5.scanlen
-    duration = 1e3 * h5.header.scanlen / h5.header.samplerate
+    # end-exclusive: t[i] = tzero + i * samplespacing
     assert np.isclose(time_index[0], h5.header.tzero)
-    assert np.isclose(time_index[-1], h5.header.tzero + duration)
+    assert np.isclose(time_index[-1],
+                      h5.header.tzero + (h5.scanlen - 1) * h5.samplespacing)
+    assert np.allclose(np.diff(time_index), h5.samplespacing)
     assert np.all(np.diff(time_index) > 0)
+
+
+def test_sample_time_conversions():
+    data = np.zeros((2, 16), dtype=np.int8)
+    header = SAMHeader(scanspline=1, nlines=2, scanlen=16, samplerate=1000.0,
+                       tzero=0, resolution=1.0)
+    h = SAMScan.handler_from_data(data, header)
+    assert h.sample_time(0) == 0.0
+    assert h.sample_time(3) == 3.0
+    assert h.sample_index(3.0) == 3
+    # ties round to nearest even (nearbyint semantics)
+    assert h.sample_index(0.5) == 0
+    assert h.sample_index(1.5) == 2
+    assert h.sample_index(2.5) == 2
+    assert h.sample_index(h.sample_time(7)) == 7
+
+
+def test_relative_and_absolute_time():
+    data = np.zeros((2, 16), dtype=np.int8)
+    header = SAMHeader(scanspline=1, nlines=2, scanlen=16, samplerate=1000.0,
+                       tzero=100, resolution=1.0)
+    starts = np.array([0, 4], dtype=np.int32)
+    h = SAMScan.handler_from_data(data, header, starts)
+
+    np.testing.assert_array_equal(h.relative_time(), h.time())
+    assert h.relative_time()[0] == 100.0
+    np.testing.assert_allclose(h.absolute_time(1), h.time(1))
+    assert h.absolute_time(1)[0] == 104.0
+    with pytest.raises(IndexError):
+        h.absolute_time(99)
+
+
+def test_full_scale_constant():
+    assert samcore.FULL_SCALE == 127
 
 
 @needs_data
@@ -434,6 +471,7 @@ class TestSAMHeader:
         t = h.time(start=10, end=20)
         assert len(t) == 10
         assert abs(t[0] - (100 + 10 / 2500 * 1e3)) < 1e-9
+        assert abs(t[-1] - (100 + 19 / 2500 * 1e3)) < 1e-9  # end exclusive
 
     def test_hash(self):
         h1 = SAMHeader(4, 10, 500, 2500.0, 0, 1.0)
@@ -487,6 +525,23 @@ class TestSAMHeader:
         samcore_io.write_h5sam(out, data, hdr, labels)
         _, hdr2, _, _ = samcore_io.read_h5sam(out)
         assert hdr2.extra == {}
+
+    def test_set_extra_types(self):
+        h = SAMHeader(4, 10, 500, 2500.0, 0, 1.0)
+        h.set_extra("count", 3)
+        h.set_extra("gain", 1.5)
+        h.set_extra("ok", True)
+        h.set_extra("note", "cal")
+        h.set_extra("tags", ["a", "b"])
+        h.set_extra("meta", {"k": 1})
+        assert h.extra["count"] == 3 and isinstance(h.extra["count"], int)
+        assert h.extra["gain"] == 1.5
+        assert h.extra["ok"] is True
+        assert h.extra["note"] == "cal"
+        assert h.extra["tags"] == ["a", "b"]
+        assert h.extra["meta"] == {"k": 1}
+        with pytest.raises(ValueError):
+            h.set_extra("bad", object())
 
 
 # ── memmap (lazy loading) ───────────────────────────────────────────────────

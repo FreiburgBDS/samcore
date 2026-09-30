@@ -2,6 +2,8 @@
 
 #include <filesystem>
 
+#include <H5Cpp.h>
+
 #include <samcore/sam_scan.hpp>
 
 namespace {
@@ -194,4 +196,41 @@ TEST(io_h5sam, MmapLazyLoad) {
     EXPECT_EQ(lazy.data(), eager.data());
     EXPECT_EQ(lazy.header(), eager.header());
     EXPECT_EQ(lazy.samlabels().labels(), eager.samlabels().labels());
+}
+
+TEST(io_h5sam, FormatVersionAttributes) {
+    samcore::sam_header header(4, 3, 128, 50.0, 10, 2.5);
+    samcore::array2d<std::int8_t> data(12, 128);
+    for (size_t i = 0; i < data.rows(); ++i) {
+        for (size_t j = 0; j < data.cols(); ++j) {
+            data[i][j] = static_cast<std::int8_t>((i + j) % 100 - 50);
+        }
+    }
+    auto scan = samcore::sam_scan::from_data(data, header);
+    const std::filesystem::path out = tmp_file("samcore_version.h5sam");
+    scan.to_h5sam(out);
+
+    {
+        H5::H5File f(out.string(), H5F_ACC_RDONLY);
+        ASSERT_TRUE(f.attrExists("samcore_format_version"));
+        std::int64_t v = 0;
+        f.openAttribute("samcore_format_version")
+            .read(H5::PredType::NATIVE_INT64, &v);
+        EXPECT_EQ(v, 1);
+        EXPECT_TRUE(f.attrExists("samcore_version"));
+    }
+
+    // A file from a newer library warns but still loads: format changes are
+    // expected to be additive, so a higher version is not a hard error.
+    {
+        H5::H5File rw(out.string(), H5F_ACC_RDWR);
+        H5::Attribute a = rw.openAttribute("samcore_format_version");
+        const std::int64_t future = 999;
+        a.write(H5::PredType::NATIVE_INT64, &future);
+    }
+    auto loaded = samcore::sam_scan::from_file(out);
+    EXPECT_EQ(loaded.data(), data);
+    auto lazy = samcore::sam_scan::from_file(out, true);
+    EXPECT_EQ(lazy.data(), data);
+    std::filesystem::remove(out);
 }

@@ -218,6 +218,16 @@ class TestPreprocess:
         assert np.all(np.min(ds.X, axis=1) >= 0.0)
         assert np.all(np.max(ds.X, axis=1) <= 1.0)
 
+    def test_normalize_default_is_minmax(self, single_handler):
+        """The documented default must match the C++ default ('minmax')."""
+        ds_default = SAMDataset(single_handler)
+        ds_explicit = SAMDataset(single_handler)
+        ds_default.preprocess("normalize")
+        ds_explicit.preprocess("normalize", mode="minmax")
+        np.testing.assert_allclose(ds_default.X, ds_explicit.X)
+        assert np.all(ds_default.X >= 0.0)
+        assert np.all(ds_default.X <= 1.0)
+
     def test_savgol(self, single_handler):
         handlers = single_handler
         ds = SAMDataset(handlers)
@@ -529,6 +539,24 @@ class TestSplitting:
         assert ds.shuffled is True
         assert ds.copy().shuffled is True
 
+    def test_train_test_split_leaves_global_rng_untouched(self, multi_handlers):
+        """Regression: the split must not seed numpy's global RNG."""
+        ds = SAMDataset(multi_handlers)
+        state = np.random.get_state()
+        ds.train_test_split(test_size=0.5, random_state=42)
+        after = np.random.get_state()
+        assert state[0] == after[0]
+        np.testing.assert_array_equal(state[1], after[1])
+        assert state[2:] == after[2:]
+
+    def test_split_by_label_reproducible_with_seed(self, labeled_handler):
+        ds1 = SAMDataset(labeled_handler)
+        ds2 = SAMDataset(labeled_handler)
+        ds1.split_by_label("Defect_A", test_size=0.5, random_state=7)
+        ds2.split_by_label("Defect_A", test_size=0.5, random_state=7)
+        np.testing.assert_array_equal(ds1.test_indices, ds2.test_indices)
+        np.testing.assert_array_equal(ds1.train_indices, ds2.train_indices)
+
     @needs_h5samd
     def test_shuffled_flag_reset_on_load(self):
         ds = SAMDataset.load(H5SAMD_PATH)
@@ -589,6 +617,21 @@ class TestBatches:
         ds.transform(lambda d: d[:, :5])
         batches = list(ds.batches("train"))
         assert batches[0][0].shape[1] == 5
+
+    def test_batches_match_split_indices(self, multi_handlers):
+        """Per-batch provenance/labels must equal the dataset's own arrays."""
+        ds = SAMDataset(multi_handlers)
+        ds.train_test_split(test_size=0.3, random_state=1)
+        indices = ds.train_indices
+        spatial = ds.spatial
+        labels = np.asarray(ds.labels.labels)
+        seen = 0
+        for Xb, yb, sb in ds.batches("train", shuffle=False, batch_size=7):
+            sl = slice(seen, seen + Xb.shape[0])
+            np.testing.assert_array_equal(yb, labels[indices[sl]])
+            np.testing.assert_array_equal(sb, spatial[indices[sl]])
+            seen += Xb.shape[0]
+        assert seen == len(indices)
 
 
 # ── statistics ───────────────────────────────────────────────────────────────
@@ -854,6 +897,47 @@ class TestGetCube:
         batches = list(ds.spatial_patches(patch_size=(999, 999), stride=(1, 1),
                                           shuffle=False))
         assert len(batches) == 0
+
+    def test_spatial_patches_match_cube_extraction(self, multi_handlers):
+        """Patches must equal the corresponding get_cube_X slices, in order."""
+        ds = SAMDataset(multi_handlers, unsupervised=True)
+        ph, pw, sh, sw = 4, 1, 4, 1
+        patches = list(ds.spatial_patches(patch_size=(ph, pw),
+                                          stride=(sh, sw), shuffle=False))
+        expected = []
+        for idx, (nlines, cols) in enumerate(ds.cube_shapes):
+            cube = ds.get_cube_X(idx)
+            for r in range(max(0, (nlines - ph) // sh + 1)):
+                for c in range(max(0, (cols - pw) // sw + 1)):
+                    expected.append(cube[r * sh:r * sh + ph,
+                                         c * sw:c * sw + pw, :])
+        assert len(patches) == len(expected)
+        for (Xp,), Xe in zip(patches, expected):
+            np.testing.assert_array_equal(Xp, Xe)
+
+    def test_spatial_patches_copy_is_independent(self, single_handler):
+        ds = SAMDataset(single_handler, unsupervised=True)
+        (Xp,) = next(iter(ds.spatial_patches(patch_size=(5, 1), stride=(5, 1),
+                                             shuffle=False, copy=True)))
+        Xp[...] = 999.0
+        assert not np.any(ds.X == 999.0)
+
+    def test_spatial_patches_view_writes_through(self, single_handler):
+        ds = SAMDataset(single_handler, unsupervised=True)
+        (Xp,) = next(iter(ds.spatial_patches(patch_size=(5, 1), stride=(5, 1),
+                                             shuffle=False, copy=False)))
+        before = float(ds.X[0, 0])
+        Xp[0, 0, 0] = 123.0
+        assert float(ds.X[0, 0]) == 123.0
+        Xp[0, 0, 0] = before
+
+    def test_cube_batches_view_writes_through(self, multi_handlers):
+        ds = SAMDataset(multi_handlers, unsupervised=True)
+        (Xc,) = next(iter(ds.cube_batches(shuffle=False, copy=False)))
+        before = float(ds.X[0, 0])
+        Xc[0, 0, 0, 0] = 77.0
+        assert float(ds.X[0, 0]) == 77.0
+        Xc[0, 0, 0, 0] = before
 
 
 # ── stratified split ─────────────────────────────────────────────────────────

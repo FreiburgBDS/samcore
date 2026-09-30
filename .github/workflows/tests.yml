@@ -38,6 +38,14 @@ jobs:
           python -m pip install --upgrade pip
           pip install .[test]
 
+      # One lane also installs CPU-only torch so the optional interop tests
+      # (tests/python/test_torch_interop.py) actually run instead of skipping.
+      # torch is not a package dependency; the CPU index keeps the download
+      # small (the default PyPI wheel pulls ~3 GB of CUDA libraries).
+      - name: Install CPU torch for interop tests
+        if: runner.os == 'Linux' && matrix.python == '3.13'
+        run: pip install torch --index-url https://download.pytorch.org/whl/cpu
+
       # Python 3.8+ no longer searches %PATH% for an extension module's DLL
       # dependencies, so the conda HDF5/OpenMP runtime DLLs must sit next to
       # the compiled extension.  The released wheels get this from delvewheel;
