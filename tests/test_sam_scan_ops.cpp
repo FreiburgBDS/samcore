@@ -674,10 +674,9 @@ TEST(sam_scan, TofEnvelopePeak) {
     // tzero 1000 + 100 * 10 ns, refined to the exact envelope centre
     EXPECT_NEAR(t[0][0], 2000.0f, 0.05f);
     EXPECT_NEAR(t[0][1], 3500.0f, 0.05f);
-    // silent window -> NaN (bit pattern; fast-math breaks std::isnan)
-    std::uint32_t bits = 0;
-    std::memcpy(&bits, &t[1][1], sizeof(bits));
-    EXPECT_EQ(bits & 0x7fffffffu, 0x7fc00000u);
+    // silent window -> the documented no-echo sentinel (-1.0, not NaN:
+    // Release builds use -ffast-math, where NaN is unreliable)
+    EXPECT_FLOAT_EQ(t[1][1], no_tof);
 
     // the gate selects the burst inside it (second burst only)
     auto g = h.tof(180, 0);
@@ -689,10 +688,11 @@ TEST(sam_scan, TofEnvelopePeak) {
 }
 
 TEST(sam_scan, TofThicknessAndValidation) {
-    sam_header header(1, 1, 100, 100.0, 0, 1.0); // 10 ns/sample
-    array2d<std::int8_t> data(1, 100, 0);
+    sam_header header(2, 1, 100, 100.0, 0, 1.0); // 10 ns/sample, 2 scans
+    array2d<std::int8_t> data(2, 100, 0);
     for (std::int64_t j = 0; j < 100; ++j) {
         data[0][j] = burst_sample(j, 25, 4.0, 100.0);
+        // data[1] stays silent
     }
     auto h = sam_scan::from_data(data, header);
 
@@ -701,6 +701,9 @@ TEST(sam_scan, TofThicknessAndValidation) {
     auto thick = h.thickness(1500.0);
     // 250 ns * 1e-9 * 1500 m/s / 2 = 1.875e-4 m
     EXPECT_NEAR(thick[0][0], 1.875e-4f, 1e-9f);
+    // silent scan -> the no-echo sentinel in both tof and thickness
+    EXPECT_FLOAT_EQ(t[0][1], no_tof);
+    EXPECT_FLOAT_EQ(thick[0][1], no_tof);
 
     EXPECT_THROW((void)h.tof(50, 50), std::invalid_argument);
     EXPECT_THROW((void)h.tof(0, 200), std::invalid_argument);

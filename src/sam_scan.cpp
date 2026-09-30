@@ -5,7 +5,6 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
-#include <limits>
 #include <numeric>
 #include <stdexcept>
 
@@ -45,13 +44,6 @@ std::int64_t first_crossing(std::span<const std::int8_t> scan,
         }
     }
     return -1;
-}
-
-// Bit-pattern NaN test (std::isnan is unreliable under -ffast-math).
-bool is_nan_bits(float v) {
-    std::uint32_t bits = 0;
-    std::memcpy(&bits, &v, sizeof(bits));
-    return (bits & 0x7fffffffu) > 0x7f800000u;
 }
 
 // Fold a uniform, fully valid starts vector into tzero and clear it.
@@ -378,7 +370,6 @@ array2d<float> sam_scan::tof(std::int64_t start, std::int64_t end,
                 peak = k;
             }
         }
-        float value = std::numeric_limits<float>::quiet_NaN();
         if (peak >= 0 && best > 0.0) {
             double pos = static_cast<double>(peak);
             if (sub_sample && peak > start && peak + 1 < end) {
@@ -389,9 +380,12 @@ array2d<float> sam_scan::tof(std::int64_t start, std::int64_t end,
                     pos += std::clamp(0.5 * (y0 - y2) / denom, -0.5, 0.5);
                 }
             }
-            value = static_cast<float>(header_.tzero + pos * spacing);
+            out[i / nc][i % nc] =
+                static_cast<float>(header_.tzero + pos * spacing);
+        } else {
+            // Silent window: documented no-echo sentinel (see no_tof).
+            out[i / nc][i % nc] = no_tof;
         }
-        out[i / nc][i % nc] = value;
     }
     return out;
 }
@@ -404,7 +398,10 @@ array2d<float> sam_scan::thickness(double sound_speed_m_s, std::int64_t start,
     }
     array2d<float> out = tof(start, end, sub_sample);
     const float scale = static_cast<float>(sound_speed_m_s * 1e-9 / 2.0);
-    for (auto& v : out.flat()) v *= scale;
+    for (auto& v : out.flat()) {
+        // The no-echo sentinel stays -1; real ToF values are scaled to m.
+        if (v != no_tof) v *= scale;
+    }
     return out;
 }
 
@@ -441,11 +438,11 @@ xgate_result sam_scan::xgate(double gate_ns, size_t n_gates,
     // The envelope is expensive, so compute the ToF picks once up front.
     std::vector<double> tof_pos;
     if (pick == "tof") {
-        const array2d<float> t = tof(0, 0, true); // ns; NaN when silent
+        const array2d<float> t = tof(0, 0, true); // ns; no_tof when silent
         tof_pos.assign(n, -1.0);
         for (size_t i = 0; i < n; ++i) {
             const float v = t[i / nc][i % nc];
-            if (!is_nan_bits(v)) {
+            if (v != no_tof) {
                 tof_pos[i] = (static_cast<double>(v) - header_.tzero) / spacing;
             }
         }
@@ -1191,7 +1188,7 @@ void sam_scan::align_tof(double gate_ns, size_t reference, double start_ns) {
     std::vector<bool> valid(n, false);
     for (size_t i = 0; i < n; ++i) {
         const float v = peaks[i / nc][i % nc];
-        if (!is_nan_bits(v)) {
+        if (v != no_tof) {
             pos[i] = (static_cast<double>(v) - header_.tzero) / spacing;
             valid[i] = true;
         }

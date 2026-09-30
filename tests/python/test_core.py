@@ -74,6 +74,13 @@ def test_full_scale_constant():
     assert samcore.FULL_SCALE == 127
 
 
+def test_no_tof_constant():
+    # "no echo" is a finite sentinel (not NaN) because Release builds use
+    # -ffast-math, where NaN values are unreliable across compilers.
+    assert samcore.NO_TOF == -1.0
+    assert isinstance(samcore.NO_TOF, float)
+
+
 @needs_data
 def test_image(h5):
     img_max = h5.image("max")

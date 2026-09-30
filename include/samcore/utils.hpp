@@ -11,7 +11,9 @@
 namespace samcore::utils {
 
 // Pearson kurtosis (bias-corrected = False, fisher = False) per signal,
-// matching scipy.stats.kurtosis(..., fisher=False).
+// matching scipy.stats.kurtosis(..., fisher=False).  Constant
+// (zero-variance) signals return 0 instead of scipy's NaN: -ffast-math
+// makes NaN values unreliable.
 [[nodiscard]] std::vector<double> kurt(const array2d<float>& data);
 
 // Sample-spaced time index tzero + i * delta_t for i in [0, num)

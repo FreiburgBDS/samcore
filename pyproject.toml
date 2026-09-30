@@ -26,7 +26,10 @@ authors = [
 ]
 
 [project.optional-dependencies]
-test = ["pytest"]
+# h5py and scipy back the parity checks in the Python suite (format-version
+# attributes, scipy medfilt parity); the tests skip cleanly when they are
+# absent, but CI installs them so those checks actually run.
+test = ["pytest", "h5py", "scipy"]
 test-torch = ["torch"]
 
 [tool.scikit-build]

@@ -24,8 +24,9 @@ samcore requires a C++20 compiler and CMake >= 3.22.
   access).
 - **nanobind** + **numpy**: build-time dependencies of the Python package
   (installed automatically by pip).
-- **Python >= 3.9** and **pytest**: for the Python test suite
-  (`pip install ".[test]"`).
+- **Python >= 3.9**, **pytest**, **h5py** and **scipy**: for the Python test
+  suite (`pip install ".[test]"`).  h5py and scipy back the optional parity
+  checks; the suite skips those tests cleanly when they are absent.
 
 ### Cloning
 

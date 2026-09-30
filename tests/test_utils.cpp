@@ -123,20 +123,15 @@ TEST(utils, SpectralEnergyRatio) {
 }
 
 
-TEST(utils, KurtConstantRowIsNan) {
-    // scipy parity: kurtosis of a zero-variance row is NaN.  The check
-    // compares the bit pattern because -ffast-math makes std::isnan
-    // always return false.
+TEST(utils, KurtConstantRowIsZero) {
+    // scipy returns NaN for a zero-variance row; samcore documents 0
+    // because Release builds use -ffast-math, where NaN is unreliable.
     array2d<float> d(2, 16);
     for (size_t j = 0; j < 16; ++j) {
         d[0][j] = 3.0f;
         d[1][j] = static_cast<float>(j);
     }
     auto k = kurt(d);
-    std::uint64_t bits;
-    std::memcpy(&bits, &k[0], sizeof(bits));
-    // Quiet NaN with the sign bit masked out: -ffast-math makes std::isnan
-    // always return false, and the sign of the NaN varies by compiler.
-    EXPECT_EQ(bits & 0x7fffffffffffffffull, 0x7ff8000000000000ull);
+    EXPECT_DOUBLE_EQ(k[0], 0.0);
     EXPECT_NEAR(k[1], 1.7905882352941176, 1e-12);
 }

@@ -415,8 +415,8 @@ def tof(self: SAMScan, start: int = 0, end: int = 0,
     -------
     ndarray (float32)
         ToF map of shape ``(nlines, cols)`` in ns on the handler's time
-        scale (``tzero + sample * samplespacing``).  Silent windows yield
-        NaN.
+        scale (``tzero + sample * samplespacing``).  Windows without an
+        envelope peak return ``samcore.NO_TOF`` (-1.0) instead of NaN.
     """
     return self._tof(int(start), int(end), bool(sub_sample))  # type: ignore[attr-defined]
 
@@ -425,8 +425,9 @@ def thickness(self: SAMScan, sound_speed_m_s: float, start: int = 0,
               end: int = 0, sub_sample: bool = True) -> NDArray[np.float32]:
     """Pulse-echo thickness image derived from :meth:`tof`.
 
-    ``thickness = tof_ns * 1e-9 * sound_speed_m_s / 2``; silent windows stay
-    NaN.
+    ``thickness = tof_ns * 1e-9 * sound_speed_m_s / 2``; windows without
+    an envelope peak keep the ``samcore.NO_TOF`` sentinel (-1.0) instead
+    of NaN.
 
     Parameters
     ----------

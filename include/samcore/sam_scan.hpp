@@ -175,14 +175,15 @@ public:
     // (Hilbert magnitude) of every A-scan within the [start, end) window,
     // expressed in ns on the handler's time scale (tzero + sample *
     // samplespacing).  With sub_sample the peak position is refined by a
-    // parabolic fit through the envelope maximum and its neighbours.  Silent
-    // windows yield NaN.
+    // parabolic fit through the envelope maximum and its neighbours.
+    // Windows without an envelope peak (silent) return no_tof (-1.0).
     [[nodiscard]] array2d<float> tof(std::int64_t start = 0,
                                      std::int64_t end = 0,
                                      bool sub_sample = true) const;
 
     // Pulse-echo thickness map from tof(): tof_ns * 1e-9 * v / 2.  Returns
-    // meters (sound_speed_m_s in m/s).
+    // meters (sound_speed_m_s in m/s); windows without an envelope peak
+    // keep the no_tof sentinel (-1.0).
     [[nodiscard]] array2d<float> thickness(double sound_speed_m_s,
                                            std::int64_t start = 0,
                                            std::int64_t end = 0,

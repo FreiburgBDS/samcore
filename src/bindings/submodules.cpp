@@ -171,7 +171,9 @@ void bind_submodules(nb::module_& m) {
            "def kurt(data: numpy.typing.NDArray[numpy.float32]) -> numpy.typing.NDArray[numpy.float64]"),
        "Kurtosis of each signal (rows of ``data``).\n\n"
                "Pearson kurtosis (bias-corrected = False, fisher = False), "
-               "matching ``scipy.stats.kurtosis(..., fisher=False)``.");
+               "matching ``scipy.stats.kurtosis(..., fisher=False)``.  "
+               "Constant (zero-variance) rows return 0 instead of scipy's "
+               "NaN, because ``-ffast-math`` makes NaN values unreliable.");
     ut.def("time_index",
            [](double tzero, double delta_t, size_t num) {
                return to_numpy(utils::time_index(tzero, delta_t, num));

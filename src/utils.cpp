@@ -4,7 +4,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <limits>
 #include <stdexcept>
 
 #ifdef SAMCORE_HAS_OPENMP
@@ -32,9 +31,13 @@ std::vector<double> kurt(const array2d<float>& data) {
         }
         m2 /= static_cast<double>(n);
         m4 /= static_cast<double>(n);
-        // scipy parity: kurtosis of a constant (zero-variance) signal is NaN
-        out[s] = m2 == 0.0 ? std::numeric_limits<double>::quiet_NaN()
-                           : m4 / (m2 * m2);
+        // scipy returns NaN for a zero-variance signal; samcore documents 0
+        // instead because -ffast-math makes NaN values unreliable.
+        if (m2 == 0.0) {
+            out[s] = 0.0;
+        } else {
+            out[s] = m4 / (m2 * m2);
+        }
     }
     return out;
 }

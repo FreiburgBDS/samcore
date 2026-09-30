@@ -25,6 +25,17 @@ def _flatness_1d_ref(psd):
     return float(geometric_mean / arithmetic_mean)
 
 
+class TestKurt:
+    """Constant rows return the documented 0, not NaN (fast-math)."""
+
+    def test_constant_row_is_zero(self):
+        data = np.stack([np.full(16, 3.0, dtype=np.float32),
+                         np.arange(16, dtype=np.float32)])
+        k = utils.kurt(data)
+        assert k[0] == 0.0
+        assert np.isfinite(k[1])
+
+
 class TestMedfilt:
     """Edge padding is whole-sample reflection, not scipy's zero padding."""
 

@@ -4,7 +4,7 @@ against a NumPy reference implementation."""
 import numpy as np
 import pytest
 
-from samcore import SAMHeader, SAMScan
+from samcore import NO_TOF, SAMHeader, SAMScan
 
 
 def _header(nlines, scanlen, samplerate=100.0, tzero=0):
@@ -86,7 +86,7 @@ def test_xgate_tof_pick_matches_tof():
 
     values, starts = h.xgate(100.0, 3, pick="tof")
     tof_ns = h.tof()
-    valid = ~np.isnan(tof_ns[:, 0])
+    valid = tof_ns[:, 0] != NO_TOF
     # positive values round half away from zero (std::llround)
     ref = np.floor(tof_ns[valid, 0] / 10.0 + 0.5).astype(np.int32)
     np.testing.assert_array_equal(starts[valid], ref)

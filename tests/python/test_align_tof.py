@@ -4,7 +4,7 @@ alignment (both in-place and copy variants)."""
 import numpy as np
 import pytest
 
-from samcore import SAMHeader, SAMScan
+from samcore import NO_TOF, SAMHeader, SAMScan
 
 
 def _header(nlines, cols, scanlen, samplerate=100.0, tzero=1000):
@@ -45,7 +45,7 @@ def test_tof_envelope_peak():
     # tzero 1000 + sample * 10 ns, refined to the exact envelope centre
     np.testing.assert_allclose(t[0, 0], 2000.0, atol=0.05)
     np.testing.assert_allclose(t[0, 1], 3500.0, atol=0.05)
-    assert np.isnan(t[1, 1])
+    assert t[1, 1] == NO_TOF  # silent window: documented sentinel
 
     # the gate picks the burst inside it (second burst only)
     g = h.tof(start=180)
@@ -58,7 +58,9 @@ def test_tof_envelope_peak():
 def test_tof_validation_and_silent_window():
     h = SAMScan.handler_from_data(
         np.zeros((1, 100), dtype=np.int8), _header(1, 1, 100))
-    assert np.isnan(h.tof()[0, 0])  # no envelope peak
+    assert h.tof()[0, 0] == NO_TOF  # no envelope peak
+    # thickness derives from tof and keeps the sentinel
+    assert h.thickness(1500.0)[0, 0] == NO_TOF
 
     with pytest.raises(ValueError):
         h.tof(start=50, end=50)
