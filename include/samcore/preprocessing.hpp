@@ -26,7 +26,8 @@ namespace samcore::preprocessing {
                                     size_t window_length = 5,
                                     size_t polyorder = 2);
 
-// 1-D median filter (kernel_size odd, reflect-padded edges).
+// 1-D median filter (kernel_size odd, whole-sample reflect padding;
+// see signal::medfilt1d for the exact edge semantics).
 [[nodiscard]] array2d<float> medfilt(const array2d<float>& data,
                                      size_t kernel_size = 3);
 

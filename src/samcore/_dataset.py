@@ -9,11 +9,12 @@ time, renders fully-typed, documented members inside the generated
 ``_samcore.pyi``.
 """
 
-from typing import Callable, Iterator, Optional, Tuple, Union, cast
+from typing import Any, Callable, Iterator, Optional, Tuple, Union, cast
 
 import numpy as np
 from numpy.typing import NDArray
 
+from samcore._numpy import array_view
 from samcore._samcore import SAMDataset
 
 # Batch shapes yielded by the iterators.  Supervised datasets yield
@@ -26,6 +27,25 @@ _CubeBatch = Union[
     Tuple[NDArray[np.float32], NDArray[np.int8]],
     Tuple[NDArray[np.float32]],
 ]
+
+
+def _cube_row_offsets(dataset: SAMDataset) -> NDArray[np.int64]:
+    """Cumulative row offsets of every cube in ``X``/``Z``/``V``."""
+    offsets = np.zeros(len(dataset.cube_shapes) + 1, dtype=np.int64)
+    for i, (nlines, cols) in enumerate(dataset.cube_shapes):
+        offsets[i + 1] = offsets[i] + nlines * cols
+    return offsets
+
+
+def _cube_view(dataset: SAMDataset, data: NDArray[np.float32], idx: int,
+               offsets: NDArray[np.int64]) -> NDArray[np.float32]:
+    """Zero-copy ``(nlines, cols, features)`` view of cube ``idx`` in ``data``.
+
+    Cube rows are contiguous in ``X``/``Z``/``V``, so this is a reshape of a
+    slice, never a copy.
+    """
+    nlines, cols = dataset.cube_shapes[idx]
+    return data[offsets[idx]:offsets[idx + 1]].reshape(nlines, cols, -1)
 
 
 def preprocess(self: SAMDataset, strategy: str, **kwargs: object) -> SAMDataset:
@@ -64,7 +84,7 @@ def preprocess(self: SAMDataset, strategy: str, **kwargs: object) -> SAMDataset:
         cutoff_low=kwargs.get("cutoff_low", 0.0),
         cutoff_high=kwargs.get("cutoff_high", 0.0),
         fs=kwargs.get("fs", 0.0),
-        mode=kwargs.get("mode", "max"),
+        mode=kwargs.get("mode", "minmax"),
         window_length=kwargs.get("window_length", 5),
         polyorder=kwargs.get("polyorder", 2),
         kernel_size=kwargs.get("kernel_size", 3),
@@ -121,10 +141,9 @@ def train_test_split(self: SAMDataset, test_size: float = 0.2,
         raise ValueError("test_size must be between 0 and 1.")
     total = self.num_samples
     indices = np.arange(total)
-    if random_state is not None:
-        np.random.seed(random_state)
+    rng = np.random.default_rng(random_state)
     if shuffle:
-        np.random.shuffle(indices)
+        rng.shuffle(indices)
     split_idx = int(total * (1 - test_size))
     self.train_indices = indices[:split_idx]
     self.test_indices = indices[split_idx:]
@@ -200,7 +219,8 @@ def stratified_split_by_cube(self: SAMDataset, test_size: float = 0.2,
 
 
 def split_by_label(self: SAMDataset, label: Union[int, str],
-                   test_size: Optional[float] = None) -> None:
+                   test_size: Optional[float] = None,
+                   random_state: Optional[int] = None) -> None:
     """Isolate a specific label class into the test set (one-vs-rest).
 
     All samples matching ``label`` become the test set, everything else
@@ -217,6 +237,8 @@ def split_by_label(self: SAMDataset, label: Union[int, str],
         If given, sample only this fraction of the matching class (useful
         when the target class is very large).  If None, all matching
         samples are placed in the test set.
+    random_state : int or None, optional
+        Seed for reproducible subsampling when ``test_size`` is given.
     """
     self._require_labels()  # type: ignore[attr-defined]
     assert self.labels is not None
@@ -234,7 +256,7 @@ def split_by_label(self: SAMDataset, label: Union[int, str],
     if test_size is not None:
         if not (0 < test_size <= 1):
             raise ValueError("test_size must be between 0 and 1.")
-        rng = np.random.default_rng()
+        rng = np.random.default_rng(random_state)
         n = max(1, int(len(matching) * test_size))
         n = min(n, len(matching))
         test_idx = rng.choice(matching, size=n, replace=False)
@@ -289,20 +311,26 @@ def batches(self: SAMDataset, split: str = "train", shuffle: bool = True,
     if data is None:
         raise RuntimeError(
             f"{'Z' if use_z else 'X'} is not available in the dataset.")
+    # Provenance and labels are built once per epoch, not once per batch.
+    spatial = self.spatial
+    labels: Optional[NDArray[np.int8]] = None
+    if not self.unsupervised:
+        assert self.labels is not None
+        labels = np.asarray(self.labels.labels)
     for i in range(0, len(indices), batch_size):
         batch_idx = indices[i:i + batch_size]
         Xb = data[batch_idx]
         if self.unsupervised:
-            yield Xb, cast(np.recarray, self.spatial[batch_idx])
+            yield Xb, cast(np.recarray, spatial[batch_idx])
         else:
-            assert self.labels is not None
-            yield Xb, np.asarray(self.labels.labels)[batch_idx], \
-                cast(np.recarray, self.spatial[batch_idx])
+            assert labels is not None
+            yield Xb, labels[batch_idx], cast(np.recarray, spatial[batch_idx])
 
 
 def cube_batches(self: SAMDataset, use_z: Optional[bool] = None,
                  shuffle: bool = True,
-                 seed: Optional[int] = None) -> Iterator[_CubeBatch]:
+                 seed: Optional[int] = None,
+                 copy: bool = True) -> Iterator[_CubeBatch]:
     """Yield one entire scan cube at a time as a 2-D spatial grid.
 
     Each cube is shaped for direct use with 2-D CNNs:
@@ -317,6 +345,10 @@ def cube_batches(self: SAMDataset, use_z: Optional[bool] = None,
         Shuffle cube order.  Default True.
     seed : int or None, optional
         Seed for reproducible shuffling.
+    copy : bool, optional
+        If True (default), yield independent arrays.  If False, yield
+        zero-copy views into ``X``/``Z`` (mutating a cube then mutates the
+        dataset).
 
     Yields
     ------
@@ -330,19 +362,24 @@ def cube_batches(self: SAMDataset, use_z: Optional[bool] = None,
         raise RuntimeError("Z has not been built yet. Call transform() first.")
     if use_z is None:
         use_z = self.Z is not None
+    data = self.Z if use_z else self.X
+    if data is None:
+        raise RuntimeError(
+            f"{'Z' if use_z else 'X'} is not available in the dataset.")
     n_cubes = len(self.cube_shapes)
     order = np.arange(n_cubes)
     if shuffle:
         rng = np.random.default_rng(seed)
         rng.shuffle(order)
-    getter = self.get_cube_Z if use_z else self.get_cube_X
+    offsets = _cube_row_offsets(self)
     for i in order:
-        cube = getter(int(i))
+        cube = _cube_view(self, data, int(i), offsets)
         X = cube[np.newaxis, ...]
+        if copy:
+            X = X.copy()
         if self.unsupervised:
             yield (X,)
         else:
-            assert self.labels is not None
             y = self.get_cube_labels(int(i))
             yield X, y[np.newaxis, ...]
 
@@ -350,12 +387,13 @@ def cube_batches(self: SAMDataset, use_z: Optional[bool] = None,
 def spatial_patches(
         self: SAMDataset, patch_size: Tuple[int, int] = (32, 32),
         stride: Tuple[int, int] = (16, 16), use_z: Optional[bool] = None,
-        shuffle: bool = True, seed: Optional[int] = None
-) -> Iterator[_CubeBatch]:
+        shuffle: bool = True, seed: Optional[int] = None,
+        copy: bool = True) -> Iterator[_CubeBatch]:
     """Yield spatial patches across all cubes preserving the 2-D layout.
 
     Each patch comes from within a single cube -- patches never cross cube
-    boundaries.
+    boundaries.  Cubes are read as zero-copy reshapes of their contiguous
+    row block in ``X``/``Z``, so no full-cube copy is made per patch.
 
     Parameters
     ----------
@@ -369,6 +407,10 @@ def spatial_patches(
         Shuffle patch order.  Default True.
     seed : int or None, optional
         Seed for reproducible shuffling.
+    copy : bool, optional
+        If True (default), yield independent arrays.  If False, yield
+        zero-copy views into ``X``/``Z`` (mutating a patch then mutates the
+        dataset).
 
     Yields
     ------
@@ -381,6 +423,10 @@ def spatial_patches(
         raise RuntimeError("Z has not been built yet. Call transform() first.")
     if use_z is None:
         use_z = self.Z is not None
+    data = self.Z if use_z else self.X
+    if data is None:
+        raise RuntimeError(
+            f"{'Z' if use_z else 'X'} is not available in the dataset.")
     ph, pw = patch_size
     sh, sw = stride
     positions = []
@@ -393,10 +439,12 @@ def spatial_patches(
     if shuffle:
         rng = np.random.default_rng(seed)
         rng.shuffle(positions)
-    getter = self.get_cube_Z if use_z else self.get_cube_X
+    offsets = _cube_row_offsets(self)
     for idx, row, col in positions:
-        cube = getter(idx)
+        cube = _cube_view(self, data, idx, offsets)
         Xp = cube[row:row + ph, col:col + pw, :]
+        if copy:
+            Xp = Xp.copy()
         if self.unsupervised:
             yield (Xp,)
         else:
@@ -521,6 +569,17 @@ def __iter__(self: SAMDataset) -> Iterator[_Batch]:
     return iter(self.batches("train"))
 
 
+def __array__(self: SAMDataset, dtype: Any = None,
+              copy: Optional[bool] = None) -> NDArray[Any]:
+    """Signal matrix ``X`` as a NumPy float32 array.
+
+    ``np.asarray(dataset)`` returns ``X`` of shape
+    ``(num_samples, maxlen)`` as a zero-copy view when no dtype conversion
+    is requested.
+    """
+    return array_view(self.X, dtype, copy)
+
+
 # Attach the convenience API to the C++ class.  Setting __module__ to
 # "samcore._samcore" makes nanobind's stubgen render these members inside
 # the generated class stub; the module-level names are deleted afterwards
@@ -532,7 +591,7 @@ _PATCHED = (
     preprocess, transform, train_test_split, stratified_train_test_split,
     stratified_split_by_cube, split_by_label, batches, cube_batches,
     spatial_patches, to_numpy, to_dict, relabel, num_train_batches,
-    num_test_batches, _require_labels, __len__, __iter__,
+    num_test_batches, _require_labels, __len__, __iter__, __array__,
 )
 for _fn in _PATCHED:
     setattr(SAMDataset, _fn.__name__, _fn)
@@ -546,4 +605,4 @@ del (_PATCHED, _fn, preprocess, transform, train_test_split,
      stratified_train_test_split, stratified_split_by_cube, split_by_label,
      batches, cube_batches, spatial_patches, to_numpy, to_dict, relabel,
      num_train_batches, num_test_batches, _require_labels, __len__,
-     __iter__, SAMDataset)
+     __iter__, __array__, SAMDataset)

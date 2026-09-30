@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <limits>
 #include <numeric>
 #include <stdexcept>
 
@@ -30,6 +31,66 @@ void swap_blocks(std::int8_t* a, std::int8_t* b, size_t bytes,
     std::memcpy(scratch, a, bytes);
     std::memcpy(a, b, bytes);
     std::memcpy(b, scratch, bytes);
+}
+
+// First sample whose |value| reaches thresh_val; -1 when none.  numpy
+// parity: np.abs() on int8 wraps |-128| to -128, so a -128 sample never
+// counts as a threshold crossing.
+std::int64_t first_crossing(std::span<const std::int8_t> scan,
+                            double thresh_val) {
+    for (size_t k = 0; k < scan.size(); ++k) {
+        const auto a = static_cast<std::int8_t>(std::abs(scan[k]));
+        if (static_cast<double>(a) >= thresh_val) {
+            return static_cast<std::int64_t>(k);
+        }
+    }
+    return -1;
+}
+
+// Bit-pattern NaN test (std::isnan is unreliable under -ffast-math).
+bool is_nan_bits(float v) {
+    std::uint32_t bits = 0;
+    std::memcpy(&bits, &v, sizeof(bits));
+    return (bits & 0x7fffffffu) > 0x7f800000u;
+}
+
+// Fold a uniform, fully valid starts vector into tzero and clear it.
+bool collapse_starts(sam_header& header,
+                     std::optional<std::vector<std::int32_t>>& starts) {
+    if (!starts.has_value() || starts->empty()) return false;
+    const std::int32_t first = starts->front();
+    if (first < 0) return false;
+    for (auto s : *starts) {
+        if (s != first) return false;
+    }
+    header.tzero += static_cast<std::int64_t>(std::nearbyint(
+        static_cast<double>(first) / header.samplerate * 1e3));
+    starts = std::nullopt;
+    return true;
+}
+
+// int8 signal cube -> float32 staging buffer (used by the spectral APIs).
+array2d<float> to_float(const array2d<std::int8_t>& data) {
+    array2d<float> out(data.rows(), data.cols());
+#ifdef SAMCORE_HAS_OPENMP
+#pragma omp parallel for if (data.rows() > 8)
+#endif
+    for (size_t i = 0; i < data.rows(); ++i) {
+        for (size_t j = 0; j < data.cols(); ++j) {
+            out[i][j] = static_cast<float>(data[i][j]);
+        }
+    }
+    return out;
+}
+
+// Per-signal values -> (nlines, cols) image.
+array2d<float> reshape_signals(const std::vector<float>& values,
+                               size_t nlines, size_t ncols) {
+    array2d<float> out(nlines, ncols);
+    for (size_t i = 0; i < values.size(); ++i) {
+        out[i / ncols][i % ncols] = values[i];
+    }
+    return out;
 }
 
 // Rebuild labels/starts so that output index o takes the value at
@@ -161,6 +222,26 @@ std::vector<double> sam_scan::time(std::optional<size_t> index) const {
     return header_.time();
 }
 
+std::vector<double> sam_scan::relative_time() const {
+    return header_.time();
+}
+
+std::vector<double> sam_scan::absolute_time(size_t index) const {
+    if (starts_.has_value() && index >= starts_->size()) {
+        throw std::out_of_range("absolute_time: scan index out of range.");
+    }
+    return time(index);
+}
+
+std::int64_t sam_scan::sample_index(double time_ns) const {
+    return static_cast<std::int64_t>(
+        std::nearbyint((time_ns - header_.tzero) / samplespacing()));
+}
+
+double sam_scan::sample_time(std::int64_t index) const {
+    return header_.tzero + static_cast<double>(index) * samplespacing();
+}
+
 namespace {
 
 // Reduce every scan to a single value and reshape to (nlines, cols).
@@ -234,6 +315,168 @@ array2d<float> sam_scan::normalized_data() const {
         }
     }
     return out;
+}
+
+array2d<float> sam_scan::tof(std::int64_t start, std::int64_t end,
+                             bool sub_sample) const {
+    ensure_loaded();
+    const std::int64_t n = scanlen();
+    if (end == 0) end = n;
+    if (start < 0 || end > n || start >= end) {
+        throw std::invalid_argument(
+            "tof: invalid sample range [" + std::to_string(start) + ", " +
+            std::to_string(end) + ") for scan length " + std::to_string(n) +
+            ".");
+    }
+    const double spacing = samplespacing();
+    const size_t nc = static_cast<size_t>(cols());
+    const size_t count = data_.rows();
+    array2d<float> out(static_cast<size_t>(nlines()), nc);
+#ifdef SAMCORE_HAS_OPENMP
+#pragma omp parallel for if (count > 8)
+#endif
+    for (size_t i = 0; i < count; ++i) {
+        // Conventional pick: maximum of the analytic envelope (Hilbert
+        // magnitude) within the gate.  No amplitude threshold is involved.
+        const std::vector<double> row(data_[i].begin(), data_[i].end());
+        const std::vector<double> env = signal::hilbert_envelope(row);
+        std::int64_t peak = -1;
+        double best = 0.0;
+        for (std::int64_t k = start; k < end; ++k) {
+            const double v = env[static_cast<size_t>(k)];
+            if (v > best) {
+                best = v;
+                peak = k;
+            }
+        }
+        float value = std::numeric_limits<float>::quiet_NaN();
+        if (peak >= 0 && best > 0.0) {
+            double pos = static_cast<double>(peak);
+            if (sub_sample && peak > start && peak + 1 < end) {
+                const double y0 = env[static_cast<size_t>(peak - 1)];
+                const double y2 = env[static_cast<size_t>(peak + 1)];
+                const double denom = y0 - 2.0 * best + y2;
+                if (denom != 0.0) {
+                    pos += std::clamp(0.5 * (y0 - y2) / denom, -0.5, 0.5);
+                }
+            }
+            value = static_cast<float>(header_.tzero + pos * spacing);
+        }
+        out[i / nc][i % nc] = value;
+    }
+    return out;
+}
+
+array2d<float> sam_scan::thickness(double sound_speed_m_s, std::int64_t start,
+                                   std::int64_t end, bool sub_sample) const {
+    if (sound_speed_m_s <= 0.0) {
+        throw std::invalid_argument(
+            "thickness: sound speed must be positive.");
+    }
+    array2d<float> out = tof(start, end, sub_sample);
+    const float scale = static_cast<float>(sound_speed_m_s * 1e-9 / 2.0);
+    for (auto& v : out.flat()) v *= scale;
+    return out;
+}
+
+xgate_result sam_scan::xgate(double gate_ns, size_t n_gates,
+                             const std::string& pick, double threshold,
+                             const std::string& mode) const {
+    ensure_loaded();
+    if (!(gate_ns > 0.0)) {
+        throw std::invalid_argument("xgate: gate_ns must be positive.");
+    }
+    if (pick != "tof" && pick != "threshold" && pick != "none") {
+        throw std::invalid_argument(
+            "xgate: pick must be 'tof', 'threshold' or 'none'.");
+    }
+    if (mode != "max" && mode != "absmax" && mode != "power") {
+        throw std::invalid_argument(
+            "xgate: mode must be 'max', 'absmax' or 'power'.");
+    }
+    if (pick == "threshold" && (threshold < 0.0 || threshold > 1.0)) {
+        throw std::invalid_argument(
+            "xgate: threshold must be in [0, 1] for pick='threshold'.");
+    }
+    const double spacing = samplespacing();
+    const std::int64_t gate_samples = std::max<std::int64_t>(
+        1, static_cast<std::int64_t>(std::llround(gate_ns / spacing)));
+    const size_t n = data_.rows();
+    const size_t nc = static_cast<size_t>(cols());
+    const std::int64_t sl = scanlen();
+
+    xgate_result result;
+    result.values = array3d<float>(static_cast<size_t>(nlines()), nc, n_gates);
+    result.starts.assign(n, -1);
+
+    // The envelope is expensive, so compute the ToF picks once up front.
+    std::vector<double> tof_pos;
+    if (pick == "tof") {
+        const array2d<float> t = tof(0, 0, true); // ns; NaN when silent
+        tof_pos.assign(n, -1.0);
+        for (size_t i = 0; i < n; ++i) {
+            const float v = t[i / nc][i % nc];
+            if (!is_nan_bits(v)) {
+                tof_pos[i] = (static_cast<double>(v) - header_.tzero) / spacing;
+            }
+        }
+    }
+
+#ifdef SAMCORE_HAS_OPENMP
+#pragma omp parallel for if (n > 8)
+#endif
+    for (size_t i = 0; i < n; ++i) {
+        std::int64_t start = -1;
+        if (pick == "tof") {
+            if (tof_pos[i] >= 0.0) {
+                start = static_cast<std::int64_t>(std::llround(tof_pos[i]));
+            }
+        } else if (pick == "threshold") {
+            const double thresh = threshold * full_scale;
+            for (std::int64_t j = 0; j < sl; ++j) {
+                if (static_cast<double>(data_[i][static_cast<size_t>(j)]) >
+                    thresh) {
+                    start = j;
+                    break;
+                }
+            }
+        } else {
+            start = 0;
+        }
+        if (start < 0 || start >= sl) {
+            continue; // failed pick: zero values, start stays -1
+        }
+        result.starts[i] = static_cast<std::int32_t>(start);
+        const size_t max_gates =
+            static_cast<size_t>((sl - start) / gate_samples);
+        const size_t actual = std::min(n_gates, max_gates);
+        auto plane = result.values.plane(i / nc);
+        const size_t base = (i % nc) * n_gates;
+        for (size_t g = 0; g < actual; ++g) {
+            const auto window = data_[i].subspan(
+                static_cast<size_t>(start) + g * static_cast<size_t>(gate_samples),
+                static_cast<size_t>(gate_samples));
+            float v = 0.0f;
+            if (mode == "max") {
+                v = static_cast<float>(*std::max_element(window.begin(),
+                                                         window.end()));
+            } else if (mode == "absmax") {
+                int best = 0;
+                for (auto s : window) {
+                    best = std::max(best, std::abs(static_cast<int>(s)));
+                }
+                v = static_cast<float>(best);
+            } else { // power
+                double acc = 0.0;
+                for (auto s : window) {
+                    acc += static_cast<double>(s) * s;
+                }
+                v = static_cast<float>(acc);
+            }
+            plane[base + g] = v;
+        }
+    }
+    return result;
 }
 
 void sam_scan::set_labels(sam_labels labels) {
@@ -560,7 +803,58 @@ void sam_scan::rectangle_select_ip(std::int64_t line_start,
     *this = rectangle_select(line_start, line_end, col_start, col_end);
 }
 
-sam_scan sam_scan::time_range_select(double start_time, double end_time) const {
+sam_scan sam_scan::slice_index_range(std::int64_t start_idx,
+                                     std::int64_t end_idx) const {
+    ensure_loaded();
+    if (start_idx < 0) start_idx = 0;
+    if (end_idx > scanlen()) end_idx = scanlen();
+    if (start_idx >= end_idx) {
+        throw std::invalid_argument(
+            "Invalid sample range [" + std::to_string(start_idx) + ", " +
+            std::to_string(end_idx) + ") for scan length " +
+            std::to_string(scanlen()) + ".");
+    }
+    const std::int64_t new_scanlen = end_idx - start_idx;
+    array2d<std::int8_t> new_data(data_.rows(),
+                                  static_cast<size_t>(new_scanlen));
+    for (size_t s = 0; s < data_.rows(); ++s) {
+        std::memcpy(new_data[s].data(),
+                    data_[s].data() + static_cast<std::ptrdiff_t>(start_idx),
+                    static_cast<size_t>(new_scanlen));
+    }
+    sam_header new_header = header_;
+    new_header.scanlen = new_scanlen;
+
+    std::optional<std::vector<std::int32_t>> new_starts;
+    if (starts_.has_value() && starts_->size() == data_.rows()) {
+        // Per-scan alignment: the retained window starts start_idx samples
+        // later in every scan, so valid starts advance by start_idx.
+        new_starts = *starts_;
+        for (auto& s : *new_starts) {
+            if (s != -1) s += static_cast<std::int32_t>(start_idx);
+        }
+        collapse_starts(new_header, new_starts);
+    } else {
+        // Unaligned: the shared origin moves with the slice.
+        new_header.tzero = static_cast<std::int64_t>(
+            std::nearbyint(new_header.tzero + start_idx * samplespacing()));
+    }
+    return from_data(std::move(new_data), std::move(new_header),
+                     std::move(new_starts), labels_);
+}
+
+sam_scan sam_scan::index_range_select(std::int64_t start_idx,
+                                      std::int64_t end_idx) const {
+    return slice_index_range(start_idx, end_idx);
+}
+
+void sam_scan::index_range_select_ip(std::int64_t start_idx,
+                                     std::int64_t end_idx) {
+    *this = slice_index_range(start_idx, end_idx);
+}
+
+sam_scan sam_scan::time_range_select(double start_time,
+                                     double end_time) const {
     ensure_loaded();
     const double sp = samplespacing();
     std::int64_t start_idx =
@@ -574,20 +868,7 @@ sam_scan sam_scan::time_range_select(double start_time, double end_time) const {
             "Invalid time range [" + std::to_string(start_time) + ", " +
             std::to_string(end_time) + "] ns");
     }
-    const std::int64_t new_scanlen = end_idx - start_idx;
-    array2d<std::int8_t> new_data(data_.rows(), static_cast<size_t>(new_scanlen));
-    for (size_t s = 0; s < data_.rows(); ++s) {
-        std::memcpy(new_data[s].data(),
-                    data_[s].data() + static_cast<std::ptrdiff_t>(start_idx),
-                    static_cast<size_t>(new_scanlen));
-    }
-    sam_header new_header = header_;
-    new_header.scanlen = new_scanlen;
-    new_header.tzero =
-        static_cast<std::int64_t>(std::nearbyint(header_.tzero + start_idx * sp));
-    // starts are dropped
-    return from_data(std::move(new_data), std::move(new_header), std::nullopt,
-                     labels_);
+    return slice_index_range(start_idx, end_idx);
 }
 
 void sam_scan::time_range_select_ip(double start_time, double end_time) {
@@ -695,7 +976,7 @@ void sam_scan::zgate_ip(double threshold, std::int64_t length) {
         throw std::invalid_argument("Threshold must be between 0.0 and 1.0.");
     }
     const std::int64_t max_start = scanlen() - length;
-    const double thresh_val = threshold * 127.0;
+    const double thresh_val = threshold * full_scale;
     const size_t n = data_.rows();
     const size_t len = static_cast<size_t>(length);
 
@@ -706,16 +987,7 @@ void sam_scan::zgate_ip(double threshold, std::int64_t length) {
 #endif
     for (size_t i = 0; i < n; ++i) {
         const auto scan = data_[i];
-        std::int64_t start = -1;
-        for (size_t k = 0; k < scan.size(); ++k) {
-            // numpy parity: np.abs() on int8 wraps |-128| to -128, so a
-            // -128 sample never counts as a threshold crossing.
-            const auto a = static_cast<std::int8_t>(std::abs(scan[k]));
-            if (static_cast<double>(a) >= thresh_val) {
-                start = static_cast<std::int64_t>(k);
-                break;
-            }
-        }
+        std::int64_t start = first_crossing(scan, thresh_val);
         if (start >= 0) {
             if (start > max_start) start = max_start;
             starts[i] = static_cast<std::int32_t>(start);
@@ -731,16 +1003,7 @@ void sam_scan::zgate_ip(double threshold, std::int64_t length) {
     data_ = std::move(gated);
     align_manual(starts, length);
 
-    if (starts_.has_value() && !starts_->empty()) {
-        const bool all_equal =
-            std::all_of(starts_->begin(), starts_->end(),
-                        [&](std::int32_t v) { return v == (*starts_)[0]; });
-        if (all_equal && (*starts_)[0] >= 0) {
-            header_.tzero += static_cast<std::int64_t>(std::nearbyint(
-                static_cast<double>((*starts_)[0]) / samplerate() * 1e3));
-            starts_ = std::nullopt;
-        }
-    }
+    collapse_starts(header_, starts_);
     header_.scanlen = length;
 }
 
@@ -750,20 +1013,165 @@ sam_scan sam_scan::zgate(double threshold, std::int64_t length) const {
     return h;
 }
 
-signal::stft_result sam_scan::compute_stft(size_t nperseg,
-                                           size_t noverlap) const {
+void sam_scan::align_xcorr(size_t reference, std::int64_t max_shift) {
     ensure_loaded();
-    array2d<float> fdata(data_.rows(), data_.cols());
+    const size_t n = data_.rows();
+    if (reference >= n) {
+        throw std::out_of_range(
+            "align_xcorr: reference scan index out of range.");
+    }
+    const size_t sl = data_.cols();
+    std::int64_t ms = max_shift;
+    if (ms == 0) ms = static_cast<std::int64_t>(sl / 4);
+    if (ms < 0 || static_cast<size_t>(ms) >= sl) {
+        throw std::invalid_argument(
+            "align_xcorr: max_shift must be in [0, scanlen).");
+    }
+    const auto ref = data_[reference];
+    std::vector<std::int32_t> shifts(n, 0);
 #ifdef SAMCORE_HAS_OPENMP
-#pragma omp parallel for if (data_.rows() > 8)
+#pragma omp parallel for if (n > 8)
 #endif
-    for (size_t i = 0; i < data_.rows(); ++i) {
-        for (size_t j = 0; j < data_.cols(); ++j) {
-            fdata[i][j] = static_cast<float>(data_[i][j]);
+    for (size_t i = 0; i < n; ++i) {
+        shifts[i] = static_cast<std::int32_t>(
+            signal::xcorr_lag(data_[i], ref, ms));
+    }
+
+    // Shift every row by -shift samples (out[j] = in[j + shift], zero-filled
+    // outside the buffer) so features land where they are in the reference.
+    array2d<std::int8_t> shifted(n, sl);
+#ifdef SAMCORE_HAS_OPENMP
+#pragma omp parallel for if (n > 8)
+#endif
+    for (size_t i = 0; i < n; ++i) {
+        const auto src = data_[i];
+        auto dst = shifted[i];
+        const std::int64_t d = shifts[i];
+        for (size_t j = 0; j < sl; ++j) {
+            const std::int64_t k = static_cast<std::int64_t>(j) + d;
+            dst[j] = (k >= 0 && k < static_cast<std::int64_t>(sl))
+                         ? src[static_cast<size_t>(k)]
+                         : std::int8_t{0};
         }
     }
+    data_ = std::move(shifted);
+
+    // Absolute feature times are preserved by advancing the window starts by
+    // the applied shift.  -1 (unaligned) rows stay -1 and zero-filled.
+    if (starts_.has_value() && starts_->size() == n) {
+        for (size_t i = 0; i < n; ++i) {
+            if ((*starts_)[i] != -1) {
+                const std::int64_t s =
+                    static_cast<std::int64_t>((*starts_)[i]) + shifts[i];
+                (*starts_)[i] =
+                    static_cast<std::int32_t>(std::max<std::int64_t>(0, s));
+            }
+        }
+    }
+}
+
+sam_scan sam_scan::aligned_xcorr(size_t reference,
+                                 std::int64_t max_shift) const {
+    sam_scan h = copy();
+    h.align_xcorr(reference, max_shift);
+    return h;
+}
+
+void sam_scan::align_tof(double gate_ns, size_t reference, double start_ns) {
+    ensure_loaded();
+    if (!(gate_ns > 0.0)) {
+        throw std::invalid_argument("align_tof: gate_ns must be positive.");
+    }
+    if (start_ns < 0.0) {
+        throw std::invalid_argument(
+            "align_tof: start_ns must be non-negative.");
+    }
+    const size_t n = data_.rows();
+    if (reference >= n) {
+        throw std::out_of_range(
+            "align_tof: reference scan index out of range.");
+    }
+    const size_t sl = data_.cols();
+    const double spacing = samplespacing();
+    const std::int64_t start_idx = std::clamp<std::int64_t>(
+        static_cast<std::int64_t>(std::llround(start_ns / spacing)), 0,
+        static_cast<std::int64_t>(sl) - 1);
+    const std::int64_t gate_samples = std::max<std::int64_t>(
+        1, static_cast<std::int64_t>(std::llround(gate_ns / spacing)));
+    const std::int64_t end_idx = std::min<std::int64_t>(
+        static_cast<std::int64_t>(sl), start_idx + gate_samples);
+    if (start_idx >= end_idx) {
+        throw std::invalid_argument("align_tof: gate is outside the scan.");
+    }
+
+    // Envelope-peak ToF (ns) per scan, converted back to sample positions.
+    const array2d<float> peaks = tof(start_idx, end_idx, true);
+    const size_t nc = static_cast<size_t>(cols());
+    std::vector<double> pos(n, 0.0);
+    std::vector<bool> valid(n, false);
+    for (size_t i = 0; i < n; ++i) {
+        const float v = peaks[i / nc][i % nc];
+        if (!is_nan_bits(v)) {
+            pos[i] = (static_cast<double>(v) - header_.tzero) / spacing;
+            valid[i] = true;
+        }
+    }
+    if (!valid[reference]) {
+        throw std::invalid_argument(
+            "align_tof: reference scan has no envelope peak in the gate.");
+    }
+
+    std::vector<std::int32_t> shifts(n, 0);
+    for (size_t i = 0; i < n; ++i) {
+        if (valid[i]) {
+            shifts[i] = static_cast<std::int32_t>(
+                std::llround(pos[i] - pos[reference]));
+        }
+    }
+
+    // Shift every row by -shift samples so its echo lands on the reference's.
+    array2d<std::int8_t> shifted(n, sl);
+#ifdef SAMCORE_HAS_OPENMP
+#pragma omp parallel for if (n > 8)
+#endif
+    for (size_t i = 0; i < n; ++i) {
+        const auto src = data_[i];
+        auto dst = shifted[i];
+        const std::int64_t d = shifts[i];
+        for (size_t j = 0; j < sl; ++j) {
+            const std::int64_t k = static_cast<std::int64_t>(j) + d;
+            dst[j] = (k >= 0 && k < static_cast<std::int64_t>(sl))
+                         ? src[static_cast<size_t>(k)]
+                         : std::int8_t{0};
+        }
+    }
+    data_ = std::move(shifted);
+
+    if (starts_.has_value() && starts_->size() == n) {
+        for (size_t i = 0; i < n; ++i) {
+            if ((*starts_)[i] != -1) {
+                const std::int64_t s =
+                    static_cast<std::int64_t>((*starts_)[i]) + shifts[i];
+                (*starts_)[i] =
+                    static_cast<std::int32_t>(std::max<std::int64_t>(0, s));
+            }
+        }
+    }
+}
+
+sam_scan sam_scan::aligned_tof(double gate_ns, size_t reference,
+                               double start_ns) const {
+    sam_scan h = copy();
+    h.align_tof(gate_ns, reference, start_ns);
+    return h;
+}
+
+signal::stft_result sam_scan::compute_stft(size_t nperseg, size_t noverlap,
+                                           double f_min, double f_max) const {
+    ensure_loaded();
+    const array2d<float> fdata = to_float(data_);
     const double fs = samplerate() * 1e6;
-    auto res = signal::stft(fdata, fs, nperseg, noverlap);
+    auto res = signal::stft(fdata, fs, nperseg, noverlap, f_min, f_max);
     // Align to the handler time scale: t_aligned = t + timescale[0] * 1e-9
     const auto ts = time();
     const double offset = (ts.empty() ? 0.0 : ts[0]) * 1e-9;
@@ -771,34 +1179,51 @@ signal::stft_result sam_scan::compute_stft(size_t nperseg,
     return res;
 }
 
-signal::psd_result sam_scan::psd(size_t nperseg, size_t noverlap) const {
+signal::psd_result sam_scan::psd(size_t nperseg, size_t noverlap,
+                                 double f_min, double f_max) const {
     ensure_loaded();
-    array2d<float> fdata(data_.rows(), data_.cols());
-#ifdef SAMCORE_HAS_OPENMP
-#pragma omp parallel for if (data_.rows() > 8)
-#endif
-    for (size_t i = 0; i < data_.rows(); ++i) {
-        for (size_t j = 0; j < data_.cols(); ++j) {
-            fdata[i][j] = static_cast<float>(data_[i][j]);
-        }
-    }
-    return signal::welch_psd(fdata, samplerate() * 1e6, nperseg, noverlap);
+    const array2d<float> fdata = to_float(data_);
+    return signal::welch_psd(fdata, samplerate() * 1e6, nperseg, noverlap,
+                             f_min, f_max);
 }
 
 signal::spectrogram_result sam_scan::power_spectrogram(
-    size_t nperseg, size_t noverlap) const {
+    size_t nperseg, size_t noverlap, double f_min, double f_max) const {
     ensure_loaded();
-    array2d<float> fdata(data_.rows(), data_.cols());
-#ifdef SAMCORE_HAS_OPENMP
-#pragma omp parallel for if (data_.rows() > 8)
-#endif
-    for (size_t i = 0; i < data_.rows(); ++i) {
-        for (size_t j = 0; j < data_.cols(); ++j) {
-            fdata[i][j] = static_cast<float>(data_[i][j]);
-        }
-    }
+    const array2d<float> fdata = to_float(data_);
     return signal::spectrogram_psd(fdata, samplerate() * 1e6, nperseg,
-                                   noverlap);
+                                   noverlap, f_min, f_max);
+}
+
+array2d<float> sam_scan::stft_peak_frequency(size_t nperseg, size_t noverlap,
+                                             double f_min, double f_max) const {
+    ensure_loaded();
+    const array2d<float> fdata = to_float(data_);
+    const auto res = signal::stft_peaks(fdata, samplerate() * 1e6, nperseg,
+                                        noverlap, f_min, f_max);
+    return reshape_signals(res.peak_frequency, static_cast<size_t>(nlines()),
+                           static_cast<size_t>(cols()));
+}
+
+array2d<float> sam_scan::stft_peak_time(size_t nperseg, size_t noverlap,
+                                        double f_min, double f_max) const {
+    ensure_loaded();
+    const array2d<float> fdata = to_float(data_);
+    const auto res = signal::stft_peaks(fdata, samplerate() * 1e6, nperseg,
+                                        noverlap, f_min, f_max);
+    // Align to the handler time scale like compute_stft().
+    const auto ts = time();
+    const double offset = (ts.empty() ? 0.0 : ts[0]) * 1e-9;
+    std::vector<float> aligned = res.peak_time;
+    for (auto& t : aligned) t += static_cast<float>(offset);
+    return reshape_signals(aligned, static_cast<size_t>(nlines()),
+                           static_cast<size_t>(cols()));
+}
+
+signal::spectrum_result sam_scan::spectrum() const {
+    ensure_loaded();
+    const array2d<float> fdata = to_float(data_);
+    return signal::fft_spectrum(fdata, 1.0 / (samplerate() * 1e6));
 }
 
 } // namespace samcore

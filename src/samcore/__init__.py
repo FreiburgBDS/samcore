@@ -20,10 +20,11 @@ Typical workflow::
         ...
 """
 
-from samcore._samcore import (SAMDataset, SAMHeader, SAMLabels, SAMScan,
-                              merge_labels, preprocessing, utils)
+from samcore._samcore import (FULL_SCALE, SAMDataset, SAMHeader, SAMLabels,
+                              SAMScan, merge_labels, preprocessing, utils)
 
 from samcore import _dataset, _labels, _scan
+from samcore import interop
 from samcore._io import io
 
 try:

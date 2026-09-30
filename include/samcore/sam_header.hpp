@@ -27,8 +27,10 @@ public:
                std::string cellid = {}, std::int64_t downsample_factor = 1,
                extra_map extra = {});
 
-    // Time axis in nanoseconds for the given sample range (linspace
-    // semantics: start and end inclusive, num = end - start).
+    // Time axis in nanoseconds for samples [start, end):
+    // t[i] = tzero + (start + i) / samplerate * 1e3 for
+    // i in [0, end - start).  `end` is exclusive; end < start (e.g. the
+    // default -1) means the full scanlen.
     [[nodiscard]] std::vector<double> time(std::int64_t start = 0,
                                            std::int64_t end = -1) const;
 

@@ -10,11 +10,12 @@ package at build time, renders fully-typed, documented members inside the
 generated ``_samcore.pyi``.
 """
 
-from typing import Optional, Tuple, Union
+from typing import Any, Optional, Tuple, Union
 
 import numpy as np
 from numpy.typing import NDArray
 
+from samcore._numpy import array_view
 from samcore._samcore import SAMLabels
 
 # reserved label values / names (kept for API compatibility)
@@ -126,6 +127,16 @@ def stratified_split(
     return train, test
 
 
+def __array__(self: SAMLabels, dtype: Any = None,
+              copy: Optional[bool] = None) -> NDArray[Any]:
+    """Per-scan label values as a NumPy int8 array.
+
+    ``np.asarray(labels)`` returns a zero-copy view when no dtype
+    conversion is requested.
+    """
+    return array_view(self.labels, dtype, copy)
+
+
 # Attach the convenience API to the C++ class.  Setting __module__ to
 # "samcore._samcore" makes nanobind's stubgen render these members inside
 # the generated class stub; the module-level names are deleted afterwards
@@ -140,7 +151,7 @@ SAMLabels.LABEL_NAME_UNLABELED = LABEL_NAME_UNLABELED
 SAMLabels.LABEL_HEALTHY = LABEL_HEALTHY
 SAMLabels.LABEL_NAME_HEALTHY = LABEL_NAME_HEALTHY
 for _fn in (healthy_mask, labeled_mask, unlabeled_mask, mask,
-            stratified_split):
+            stratified_split, __array__):
     setattr(SAMLabels, _fn.__name__, _fn)
     _fn.__module__ = "samcore._samcore"
     # Materialize the annotations (PEP 649 on Python >= 3.14 defers them to
@@ -149,4 +160,4 @@ for _fn in (healthy_mask, labeled_mask, unlabeled_mask, mask,
     _fn.__annotations__ = _fn.__annotations__
 
 del (_fn, healthy_mask, labeled_mask, unlabeled_mask, mask, stratified_split,
-     SAMLabels)
+     __array__, SAMLabels)

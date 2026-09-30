@@ -57,7 +57,7 @@ nb::class_<sam_dataset>(m, "SAMDataset", nb::dynamic_attr(),
                      "are required.  None (default) auto-detects: supervised "
                      "only when all scans are labeled.")
         .def_static("load", [](const std::string& path, bool mmap) {
-            return sam_dataset::load(path, mmap);
+            return without_gil([&] { return sam_dataset::load(path, mmap); });
         }, nb::arg("path"), nb::arg("mmap") = false,
            "Load a dataset from a .h5samd file.\n\n"
            "Parameters\n"
@@ -70,14 +70,19 @@ nb::class_<sam_dataset>(m, "SAMDataset", nb::dynamic_attr(),
         .def_prop_ro("loaded", [](const sam_dataset& d) { return d.loaded(); },
                      "Whether the dataset data has been loaded into memory "
                      "(mmap mode).")
-        .def("materialize", [](sam_dataset& d) { d.load(); },
+        .def("materialize", [](sam_dataset& d) { without_gil([&] { d.load(); }); },
              "Load the dataset data into memory (mmap mode).  No-op when "
              "already loaded; every data accessor calls this implicitly.")
-        .def("save", [](sam_dataset& d, const std::string& path) { d.save(path); },
+        .def("save", [](sam_dataset& d, const std::string& path) {
+             without_gil([&] { d.save(path); });
+         },
              "Save the dataset to a .h5samd file.")
-        .def("copy", [](const sam_dataset& d) { return d.copy(); },
+        .def("copy", [](const sam_dataset& d) {
+             return without_gil([&] { return d.copy(); });
+         },
              "Return a deep copy of the dataset.")
         .def_prop_ro("X", [](sam_dataset& d) {
+            without_gil([&] { d.load(); });
             auto& x = d.X();
             return nb::ndarray<nb::numpy, float>(x.data(), {x.rows(), x.cols()});
         }, "Signal matrix (num_samples, maxlen) float32.")
@@ -92,6 +97,7 @@ nb::class_<sam_dataset>(m, "SAMDataset", nb::dynamic_attr(),
         .def_prop_rw("Z",
                      [](sam_dataset& d)
                          -> std::optional<nb::ndarray<nb::numpy, float>> {
+                         without_gil([&] { d.load(); });
                          if (!d.Z()) return std::nullopt;
                          auto& z = *d.Z();
                          return nb::ndarray<nb::numpy, float>(
@@ -102,12 +108,13 @@ nb::class_<sam_dataset>(m, "SAMDataset", nb::dynamic_attr(),
                              d.Z() = std::nullopt;
                              return;
                          }
-                         d.Z() = copy_in<float>(*z);
+                         d.Z() = without_gil([&] { return copy_in<float>(*z); });
                      },
                      "Transformed feature matrix (float32), or None.")
         .def_prop_rw("V",
                      [](sam_dataset& d)
                          -> std::optional<nb::ndarray<nb::numpy, float>> {
+                         without_gil([&] { d.load(); });
                          if (!d.V()) return std::nullopt;
                          auto& v = *d.V();
                          return nb::ndarray<nb::numpy, float>(
@@ -118,7 +125,7 @@ nb::class_<sam_dataset>(m, "SAMDataset", nb::dynamic_attr(),
                              d.V() = std::nullopt;
                              return;
                          }
-                         d.V() = copy_in<float>(*v);
+                         d.V() = without_gil([&] { return copy_in<float>(*v); });
                      },
                      "Optional extra per-sample vectors "
                              "(num_samples, features) float32, or None.")
@@ -199,7 +206,7 @@ nb::class_<sam_dataset>(m, "SAMDataset", nb::dynamic_attr(),
                      "Whether the last split randomized the sample indices "
                              "(informational; reset to False on load).")
         .def_prop_ro("spatial", [](sam_dataset& d) {
-            auto sp = d.spatial();
+            auto sp = without_gil([&] { return d.spatial(); });
             std::vector<std::int32_t> idx(sp.size());
             std::vector<float> x(sp.size()), y(sp.size());
             for (size_t i = 0; i < sp.size(); ++i) {
@@ -224,7 +231,7 @@ nb::class_<sam_dataset>(m, "SAMDataset", nb::dynamic_attr(),
             return d.labels()->label_names();
         }, "The list of class label names (requires labels).")
         .def_prop_ro("handler_ids", [](sam_dataset& d) {
-            auto sp = d.spatial();
+            auto sp = without_gil([&] { return d.spatial(); });
             std::vector<std::int32_t> idx(sp.size());
             for (size_t i = 0; i < sp.size(); ++i) idx[i] = sp[i].idx;
             return to_numpy(std::move(idx));
@@ -244,9 +251,13 @@ nb::class_<sam_dataset>(m, "SAMDataset", nb::dynamic_attr(),
                std::optional<bool> unsupervised) {
                 std::vector<std::filesystem::path> paths;
                 for (const auto& p : input_paths) paths.emplace_back(p);
-                samcore::io::convert_h5sam_to_h5samd(paths, output_path,
-                                                     pad_value, unsupervised);
-                return sam_dataset::load(output_path);
+                without_gil([&] {
+                    samcore::io::convert_h5sam_to_h5samd(paths, output_path,
+                                                         pad_value,
+                                                         unsupervised);
+                });
+                return without_gil(
+                    [&] { return sam_dataset::load(output_path); });
             },
             nb::arg("input_paths"), nb::arg("output_path"),
             nb::arg("pad_value") = 0.0f,
@@ -292,7 +303,7 @@ nb::class_<sam_dataset>(m, "SAMDataset", nb::dynamic_attr(),
                  args.start = start;
                  args.end = end;
                  args.window = window;
-                 d.preprocess(strategy, args);
+                 without_gil([&] { d.preprocess(strategy, args); });
              },
              nb::arg("strategy"), nb::arg("cutoff") = 0.0,
              nb::arg("cutoff_low") = 0.0, nb::arg("cutoff_high") = 0.0,
@@ -307,36 +318,41 @@ nb::class_<sam_dataset>(m, "SAMDataset", nb::dynamic_attr(),
                      "parameters relevant to the chosen strategy are used.")
         .def("get_cube_X",
              [](sam_dataset& d, std::int32_t idx) {
-                 return to_numpy3(d.get_cube_X(idx));
+                 return to_numpy3(without_gil([&] { return d.get_cube_X(idx); }));
              }, nb::sig(
                  "def get_cube_X(self, idx: int) -> numpy.typing.NDArray[numpy.float32]"),
              "Cube ``idx`` as a (nlines, cols, scanlen) float32 "
                      "array.")
         .def("get_cube_Z",
              [](sam_dataset& d, std::int32_t idx) {
-                 return to_numpy3(d.get_cube_Z(idx));
+                 return to_numpy3(without_gil([&] { return d.get_cube_Z(idx); }));
              }, nb::sig(
                  "def get_cube_Z(self, idx: int) -> numpy.typing.NDArray[numpy.float32]"),
              "Cube ``idx`` of the transformed features ``Z``.")
         .def("get_cube_V",
              [](sam_dataset& d, std::int32_t idx) {
-                 return to_numpy3(d.get_cube_V(idx));
+                 return to_numpy3(without_gil([&] { return d.get_cube_V(idx); }));
              }, nb::sig(
                  "def get_cube_V(self, idx: int) -> numpy.typing.NDArray[numpy.float32]"),
              "Cube ``idx`` of the extra per-sample vectors ``V``.")
         .def("get_cube_labels",
              [](sam_dataset& d, std::int32_t idx) {
-                 return to_numpy(d.get_cube_labels(idx));
+                 return to_numpy(without_gil([&] { return d.get_cube_labels(idx); }));
              }, nb::sig(
                  "def get_cube_labels(self, idx: int) -> numpy.typing.NDArray[numpy.int8]"),
              "Cube ``idx`` labels as a (nlines, cols) int8 array.")
-        .def("class_distribution", &sam_dataset::class_distribution,
+        .def("class_distribution",
+             [](const sam_dataset& d) {
+                 return without_gil([&] { return d.class_distribution(); });
+             },
              "Counts of each label name across the dataset (requires "
                      "labels).")
         .def("to_binary",
              [](sam_dataset& d,
                 std::variant<std::int8_t, std::string> positive_label) {
-                 return to_numpy(d.to_binary(std::move(positive_label)));
+                 auto binary = without_gil(
+                     [&] { return d.to_binary(std::move(positive_label)); });
+                 return to_numpy(std::move(binary));
              },
              nb::arg("positive_label"),
              nb::sig(
@@ -344,7 +360,10 @@ nb::class_<sam_dataset>(m, "SAMDataset", nb::dynamic_attr(),
              "Binary labels: 1 for the positive class, 0 for healthy, "
                      "-1 for unlabeled.  Accepts a numeric value or a name.")
         .def("to_one_hot",
-             [](sam_dataset& d) { return to_numpy(d.to_one_hot()); },
+             [](sam_dataset& d) {
+                 return to_numpy(
+                     without_gil([&] { return d.to_one_hot(); }));
+             },
              nb::sig(
                  "def to_one_hot(self) -> numpy.typing.NDArray[numpy.float32]"),
              "One-hot matrix (num_samples, num_classes) float32.")
@@ -367,7 +386,7 @@ nb::class_<sam_dataset>(m, "SAMDataset", nb::dynamic_attr(),
                      }
                      m.emplace(std::move(key), std::move(val));
                  }
-                 d.relabel(m);
+                 without_gil([&] { d.relabel(m); });
              },
              "Remap the dataset labels according to ``mapping``.");
 

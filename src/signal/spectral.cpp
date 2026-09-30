@@ -77,6 +77,48 @@ void fill_windowed(const array2d<float>& data, size_t s0, size_t chunk,
 // Signals per FFT batch (bounds temporary memory).
 constexpr size_t BATCH_SIGNALS = 256;
 
+// Inclusive bin range [k0, k1) for the [f_min, f_max] band of a one-sided
+// frequency axis.  f_max <= 0 means the Nyquist bin.
+std::pair<size_t, size_t> band_bins(const std::vector<float>& f, double f_min,
+                                    double f_max) {
+    if (f.empty()) return {0, 0};
+    if (f_min < 0.0) {
+        throw std::invalid_argument("spectral band: f_min must be >= 0");
+    }
+    const double nyquist = f.back();
+    if (f_max <= 0.0) f_max = nyquist;
+    if (f_max > nyquist * (1.0 + 1e-9)) {
+        throw std::invalid_argument("spectral band: f_max exceeds Nyquist");
+    }
+    if (f_min > f_max) {
+        throw std::invalid_argument("spectral band: f_min must be <= f_max");
+    }
+    size_t k0 = 0;
+    while (k0 < f.size() && static_cast<double>(f[k0]) < f_min) ++k0;
+    size_t k1 = k0;
+    while (k1 < f.size() && static_cast<double>(f[k1]) <= f_max) ++k1;
+    if (k0 >= k1) {
+        throw std::invalid_argument(
+            "spectral band contains no frequency bins");
+    }
+    return {k0, k1};
+}
+
+// Sample times of the STFT frame centres.
+std::vector<float> frame_times(size_t n, size_t nperseg, size_t step,
+                               double fs) {
+    const double start = static_cast<double>(nperseg) / 2.0;
+    const double stop = static_cast<double>(n) -
+                        static_cast<double>(nperseg) / 2.0 + 1.0;
+    const size_t nt =
+        static_cast<size_t>(std::ceil((stop - start) / static_cast<double>(step)));
+    std::vector<float> t(nt);
+    for (size_t i = 0; i < nt; ++i) {
+        t[i] = static_cast<float>((start + static_cast<double>(i * step)) / fs);
+    }
+    return t;
+}
+
 } // namespace
 
 std::vector<std::complex<double>> rfft(std::span<const double> x) {
@@ -109,7 +151,7 @@ std::vector<double> hann_window(size_t n) {
 }
 
 stft_result stft(const array2d<float>& data, double fs, size_t nperseg,
-                 size_t noverlap) {
+                 size_t noverlap, double f_min, double f_max) {
     if (nperseg < 1 || noverlap >= nperseg) {
         throw std::invalid_argument("stft: invalid nperseg/noverlap");
     }
@@ -120,23 +162,19 @@ stft_result stft(const array2d<float>& data, double fs, size_t nperseg,
     const size_t step = nperseg - noverlap;
     const size_t nframes = (n - nperseg) / step + 1;
     const size_t nfreqs = nperseg / 2 + 1;
+    const auto all_f = rfftfreq(nperseg, 1.0 / fs);
+    const auto [k0, k1] = band_bins(all_f, f_min, f_max);
+    const size_t nkept = k1 - k0;
     const auto win_d = hann_window(nperseg);
     std::vector<float> win(win_d.begin(), win_d.end());
     float win_sum = 0.0f;
     for (float w : win) win_sum += w;
 
     stft_result result;
-    result.f = rfftfreq(nperseg, 1.0 / fs);
-    {
-        const double start = static_cast<double>(nperseg) / 2.0;
-        const double stop = static_cast<double>(n) - static_cast<double>(nperseg) / 2.0 + 1.0;
-        const size_t nt = static_cast<size_t>(std::ceil((stop - start) / static_cast<double>(step)));
-        result.t.resize(nt);
-        for (size_t i = 0; i < nt; ++i) {
-            result.t[i] = static_cast<float>((start + static_cast<double>(i * step)) / fs);
-        }
-    }
-    result.zxx = array3d<std::complex<float>>(data.rows(), nfreqs, nframes);
+    result.f.assign(all_f.begin() + static_cast<std::ptrdiff_t>(k0),
+                    all_f.begin() + static_cast<std::ptrdiff_t>(k1));
+    result.t = frame_times(n, nperseg, step, fs);
+    result.zxx = array3d<std::complex<float>>(data.rows(), nkept, nframes);
 
     std::vector<float> buf;
     std::vector<std::complex<float>> spec;
@@ -152,9 +190,9 @@ stft_result stft(const array2d<float>& data, double fs, size_t nperseg,
         for (size_t i = 0; i < chunk; ++i) {
             const size_t sig = s0 + i;
             for (size_t fr = 0; fr < nframes; ++fr) {
-                for (size_t k = 0; k < nfreqs; ++k) {
+                for (size_t k = k0; k < k1; ++k) {
                     const auto v = spec[(i * nframes + fr) * nfreqs + k];
-                    result.zxx.flat()[(sig * nfreqs + k) * nframes + fr] =
+                    result.zxx.flat()[(sig * nkept + (k - k0)) * nframes + fr] =
                         std::complex<float>(v.real() * scale, v.imag() * scale);
                 }
             }
@@ -164,7 +202,7 @@ stft_result stft(const array2d<float>& data, double fs, size_t nperseg,
 }
 
 psd_result welch_psd(const array2d<float>& data, double fs, size_t nperseg,
-                     size_t noverlap) {
+                     size_t noverlap, double f_min, double f_max) {
     if (nperseg < 1 || noverlap >= nperseg) {
         throw std::invalid_argument("welch_psd: invalid nperseg/noverlap");
     }
@@ -175,6 +213,9 @@ psd_result welch_psd(const array2d<float>& data, double fs, size_t nperseg,
     const size_t step = nperseg - noverlap;
     const size_t nframes = (n - nperseg) / step + 1;
     const size_t nfreqs = nperseg / 2 + 1;
+    const auto all_f = rfftfreq(nperseg, 1.0 / fs);
+    const auto [k0, k1] = band_bins(all_f, f_min, f_max);
+    const size_t nkept = k1 - k0;
     const auto win_d = hann_window(nperseg);
     std::vector<float> win(win_d.begin(), win_d.end());
     float win2_sum = 0.0f;
@@ -183,12 +224,13 @@ psd_result welch_psd(const array2d<float>& data, double fs, size_t nperseg,
     const bool even = nperseg % 2 == 0;
 
     psd_result result;
-    result.f = rfftfreq(nperseg, 1.0 / fs);
-    result.psd = array2d<float>(data.rows(), nfreqs, 0.0f);
+    result.f.assign(all_f.begin() + static_cast<std::ptrdiff_t>(k0),
+                    all_f.begin() + static_cast<std::ptrdiff_t>(k1));
+    result.psd = array2d<float>(data.rows(), nkept, 0.0f);
 
     std::vector<float> buf;
     std::vector<std::complex<float>> spec;
-    std::vector<float> acc(nfreqs);
+    std::vector<float> acc(nkept);
     for (size_t s0 = 0; s0 < data.rows(); s0 += BATCH_SIGNALS) {
         const size_t chunk = std::min<size_t>(BATCH_SIGNALS, data.rows() - s0);
         buf.resize(chunk * nframes * nperseg);
@@ -200,15 +242,17 @@ psd_result welch_psd(const array2d<float>& data, double fs, size_t nperseg,
         for (size_t i = 0; i < chunk; ++i) {
             std::fill(acc.begin(), acc.end(), 0.0f);
             for (size_t fr = 0; fr < nframes; ++fr) {
-                for (size_t k = 0; k < nfreqs; ++k) {
-                    acc[k] += std::norm(spec[(i * nframes + fr) * nfreqs + k]);
+                for (size_t k = k0; k < k1; ++k) {
+                    acc[k - k0] +=
+                        std::norm(spec[(i * nframes + fr) * nfreqs + k]);
                 }
             }
             auto out = result.psd[s0 + i];
-            for (size_t k = 0; k < nfreqs; ++k) {
-                float v = acc[k] / static_cast<float>(nframes) * static_cast<float>(scale);
+            for (size_t k = k0; k < k1; ++k) {
+                float v = acc[k - k0] / static_cast<float>(nframes) *
+                          static_cast<float>(scale);
                 if (k > 0 && (even ? k + 1 < nfreqs : true)) v *= 2.0f;
-                out[k] = v;
+                out[k - k0] = v;
             }
         }
     }
@@ -216,7 +260,8 @@ psd_result welch_psd(const array2d<float>& data, double fs, size_t nperseg,
 }
 
 spectrogram_result spectrogram_psd(const array2d<float>& data, double fs,
-                                   size_t nperseg, size_t noverlap) {
+                                   size_t nperseg, size_t noverlap,
+                                   double f_min, double f_max) {
     if (nperseg < 1 || noverlap >= nperseg) {
         throw std::invalid_argument("spectrogram_psd: invalid nperseg/noverlap");
     }
@@ -227,6 +272,9 @@ spectrogram_result spectrogram_psd(const array2d<float>& data, double fs,
     const size_t step = nperseg - noverlap;
     const size_t nframes = (n - nperseg) / step + 1;
     const size_t nfreqs = nperseg / 2 + 1;
+    const auto all_f = rfftfreq(nperseg, 1.0 / fs);
+    const auto [k0, k1] = band_bins(all_f, f_min, f_max);
+    const size_t nkept = k1 - k0;
     const auto win_d = hann_window(nperseg);
     std::vector<float> win(win_d.begin(), win_d.end());
     float win2_sum = 0.0f;
@@ -235,17 +283,10 @@ spectrogram_result spectrogram_psd(const array2d<float>& data, double fs,
     const bool even = nperseg % 2 == 0;
 
     spectrogram_result result;
-    result.f = rfftfreq(nperseg, 1.0 / fs);
-    {
-        const double start = static_cast<double>(nperseg) / 2.0;
-        const double stop = static_cast<double>(n) - static_cast<double>(nperseg) / 2.0 + 1.0;
-        const size_t nt = static_cast<size_t>(std::ceil((stop - start) / static_cast<double>(step)));
-        result.t.resize(nt);
-        for (size_t i = 0; i < nt; ++i) {
-            result.t[i] = static_cast<float>((start + static_cast<double>(i * step)) / fs);
-        }
-    }
-    result.sxx = array3d<float>(data.rows(), nfreqs, nframes);
+    result.f.assign(all_f.begin() + static_cast<std::ptrdiff_t>(k0),
+                    all_f.begin() + static_cast<std::ptrdiff_t>(k1));
+    result.t = frame_times(n, nperseg, step, fs);
+    result.sxx = array3d<float>(data.rows(), nkept, nframes);
 
     std::vector<float> buf;
     std::vector<std::complex<float>> spec;
@@ -260,12 +301,107 @@ spectrogram_result spectrogram_psd(const array2d<float>& data, double fs,
         for (size_t i = 0; i < chunk; ++i) {
             const size_t sig = s0 + i;
             for (size_t fr = 0; fr < nframes; ++fr) {
-                for (size_t k = 0; k < nfreqs; ++k) {
+                for (size_t k = k0; k < k1; ++k) {
                     float v = std::norm(spec[(i * nframes + fr) * nfreqs + k]) *
                               static_cast<float>(scale);
                     if (k > 0 && (even ? k + 1 < nfreqs : true)) v *= 2.0f;
-                    result.sxx.flat()[(sig * nfreqs + k) * nframes + fr] = v;
+                    result.sxx.flat()[(sig * nkept + (k - k0)) * nframes + fr] = v;
                 }
+            }
+        }
+    }
+    return result;
+}
+
+stft_peaks_result stft_peaks(const array2d<float>& data, double fs,
+                             size_t nperseg, size_t noverlap, double f_min,
+                             double f_max) {
+    if (nperseg < 1 || noverlap >= nperseg) {
+        throw std::invalid_argument("stft_peaks: invalid nperseg/noverlap");
+    }
+    const size_t n = data.cols();
+    if (n < nperseg) {
+        throw std::invalid_argument("stft_peaks: nperseg cannot be greater than the length of the signals.");
+    }
+    const size_t step = nperseg - noverlap;
+    const size_t nframes = (n - nperseg) / step + 1;
+    const size_t nfreqs = nperseg / 2 + 1;
+    const auto all_f = rfftfreq(nperseg, 1.0 / fs);
+    const auto [k0, k1] = band_bins(all_f, f_min, f_max);
+    const size_t nkept = k1 - k0;
+    const auto times = frame_times(n, nperseg, step, fs);
+    const auto win_d = hann_window(nperseg);
+    std::vector<float> win(win_d.begin(), win_d.end());
+
+    stft_peaks_result result;
+    result.peak_frequency.resize(data.rows());
+    result.peak_time.resize(data.rows());
+
+    std::vector<float> buf;
+    std::vector<std::complex<float>> spec;
+    for (size_t s0 = 0; s0 < data.rows(); s0 += BATCH_SIGNALS) {
+        const size_t chunk = std::min<size_t>(BATCH_SIGNALS, data.rows() - s0);
+        buf.resize(chunk * nframes * nperseg);
+        fill_windowed(data, s0, chunk, nperseg, step, win, buf);
+        batch_rfft_frames(buf, chunk, nframes, nperseg, spec);
+#ifdef SAMCORE_HAS_OPENMP
+#pragma omp parallel for if (chunk > 4)
+#endif
+        for (size_t i = 0; i < chunk; ++i) {
+            std::vector<float> best_bin(nkept, 0.0f);
+            std::vector<float> best_frame(nframes, 0.0f);
+            for (size_t fr = 0; fr < nframes; ++fr) {
+                for (size_t k = k0; k < k1; ++k) {
+                    const float mag =
+                        std::abs(spec[(i * nframes + fr) * nfreqs + k]);
+                    float& b = best_bin[k - k0];
+                    if (mag > b) b = mag;
+                    if (mag > best_frame[fr]) best_frame[fr] = mag;
+                }
+            }
+            size_t bin_idx = 0;
+            for (size_t j = 1; j < nkept; ++j) {
+                if (best_bin[j] > best_bin[bin_idx]) bin_idx = j;
+            }
+            size_t frame_idx = 0;
+            for (size_t j = 1; j < nframes; ++j) {
+                if (best_frame[j] > best_frame[frame_idx]) frame_idx = j;
+            }
+            result.peak_frequency[s0 + i] = all_f[k0 + bin_idx];
+            result.peak_time[s0 + i] = times[frame_idx];
+        }
+    }
+    return result;
+}
+
+spectrum_result fft_spectrum(const array2d<float>& data, double d) {
+    const size_t n = data.cols();
+    const size_t nfreqs = n / 2 + 1;
+    spectrum_result result;
+    result.f = rfftfreq(n, d);
+    result.mag = array2d<float>(data.rows(), nfreqs);
+    if (data.rows() == 0 || n == 0) return result;
+
+    std::vector<std::complex<float>> spec(BATCH_SIGNALS * nfreqs);
+    for (size_t s0 = 0; s0 < data.rows(); s0 += BATCH_SIGNALS) {
+        const size_t chunk = std::min<size_t>(BATCH_SIGNALS, data.rows() - s0);
+        const shape_t shape{chunk, n};
+        const stride_t stride_in{
+            static_cast<ptrdiff_t>(n * sizeof(float)),
+            static_cast<ptrdiff_t>(sizeof(float))};
+        const stride_t stride_out{
+            static_cast<ptrdiff_t>(nfreqs * sizeof(std::complex<float>)),
+            static_cast<ptrdiff_t>(sizeof(std::complex<float>))};
+        pocketfft::r2c(shape, stride_in, stride_out, shape_t{1}, true,
+                       data.data() + s0 * n, spec.data(), 1.0f);
+#ifdef SAMCORE_HAS_OPENMP
+#pragma omp parallel for if (chunk > 8)
+#endif
+        for (size_t i = 0; i < chunk; ++i) {
+            auto row = result.mag[s0 + i];
+            const auto* src = spec.data() + i * nfreqs;
+            for (size_t k = 0; k < nfreqs; ++k) {
+                row[k] = std::abs(src[k]);
             }
         }
     }

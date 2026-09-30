@@ -33,6 +33,7 @@ using namespace samcore;
 
 using in_i8_2 = nb::ndarray<const std::int8_t, nb::numpy, nb::ndim<2>, nb::c_contig>;
 using in_i8_1 = nb::ndarray<const std::int8_t, nb::numpy, nb::ndim<1>, nb::c_contig>;
+using in_i32_1 = nb::ndarray<const std::int32_t, nb::numpy, nb::ndim<1>, nb::c_contig>;
 using in_f32_2 = nb::ndarray<const float, nb::numpy, nb::ndim<2>, nb::c_contig>;
 using in_f32_1 = nb::ndarray<const float, nb::numpy, nb::ndim<1>, nb::c_contig>;
 
@@ -82,6 +83,14 @@ template <typename T>
 array2d<T> view_in(nb::ndarray<const T, nb::numpy, nb::ndim<2>, nb::c_contig> a) {
     return array2d<T>(const_cast<T*>(a.data()), a.shape(0), a.shape(1),
                       non_owning);
+}
+
+// Run a pure-C++ computation with the GIL released and reacquire it before
+// the result reaches nanobind.  `f` must not touch Python objects.
+template <class F>
+auto without_gil(F&& f) -> decltype(f()) {
+    nb::gil_scoped_release release;
+    return f();
 }
 
 template <typename T>

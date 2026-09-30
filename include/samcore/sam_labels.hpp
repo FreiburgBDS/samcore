@@ -88,6 +88,20 @@ public:
     // at 0 (healthy), unused names dropped.
     void clean_labels();
 
+    // Register a new class name and return its label value.  Throws when the
+    // name already exists (case-insensitive), is reserved
+    // ("healthy"/"unlabeled"), or the int8 label space is exhausted.
+    std::int8_t add_label(const std::string& name);
+
+    // Rename a class by value or current name.  Throws for the reserved
+    // healthy/unlabeled labels, unknown names and duplicate names.
+    void rename_label(std::variant<std::int8_t, std::string> label,
+                      const std::string& name);
+
+    // Delete a class by value or current name: its pixels become unlabeled
+    // and the registry is compacted (clean_labels semantics).
+    void delete_label(std::variant<std::int8_t, std::string> label);
+
     // Relabel by value or name; string targets are resolved through the
     // current registry.  In place, then clean_labels().
     void relabel(const std::map<

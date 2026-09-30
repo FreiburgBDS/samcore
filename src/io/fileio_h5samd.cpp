@@ -139,6 +139,8 @@ h5samd_result read_h5samd(const std::filesystem::path& path) {
     try {
         H5::H5File file(path.string(), H5F_ACC_RDONLY);
 
+        detail::warn_if_newer_format(file, "read_h5samd(" + path.string() + ")");
+
         h5samd_result result;
         size_t x_cols = 0;
         if (file.nameExists("X")) {
@@ -174,6 +176,7 @@ h5samd_lazy_handle read_h5samd_lazy(const std::filesystem::path& path) {
     }
     try {
         H5::H5File file(path.string(), H5F_ACC_RDONLY);
+        detail::warn_if_newer_format(file, "read_h5samd_lazy(" + path.string() + ")");
         auto state = std::make_unique<h5samd_lazy_state>();
 
         if (file.nameExists("X")) {
@@ -237,6 +240,8 @@ void write_h5samd(const std::filesystem::path& path, const array2d<float>& x,
     }
     try {
         H5::H5File file(path.string(), H5F_ACC_TRUNC);
+
+        detail::write_format_version(file);
 
         detail::write_2d_gzip(file, "X", x, H5::PredType::NATIVE_FLOAT);
 
@@ -328,13 +333,21 @@ void convert_h5sam_to_h5samd(
         std::vector<std::int64_t> scan_counts;
 
         for (const auto& path : input_paths) {
-            h5sam_result res = read_h5sam(path);
-            scan_counts.push_back(static_cast<std::int64_t>(res.data.rows()));
-            scanlens.push_back(static_cast<std::int32_t>(res.data.cols()));
-            cube_shapes.emplace_back(static_cast<std::int32_t>(res.header.nlines),
-                                     static_cast<std::int32_t>(res.header.scanspline));
-            cube_resolutions.push_back(res.header.resolution);
-            labels_list.push_back(std::move(res.labels));
+            // Metadata-only open: header/labels/starts are read eagerly and
+            // the signal dataset is never touched in this pass (it is read
+            // once in phase 2).
+            io::h5sam_lazy_handle meta = io::read_h5sam_lazy(path);
+            if (!meta.data) {
+                throw std::runtime_error(
+                    "convert_h5sam_to_h5samd: missing data handle for " +
+                    path.string());
+            }
+            scan_counts.push_back(static_cast<std::int64_t>(meta.data->rows));
+            scanlens.push_back(static_cast<std::int32_t>(meta.data->cols));
+            cube_shapes.emplace_back(static_cast<std::int32_t>(meta.header.nlines),
+                                     static_cast<std::int32_t>(meta.header.scanspline));
+            cube_resolutions.push_back(meta.header.resolution);
+            labels_list.push_back(std::move(meta.labels));
         }
 
         const std::int64_t total_signals =
@@ -361,6 +374,7 @@ void convert_h5sam_to_h5samd(
 
         // Phase 2: create the output and stream data per file.
         H5::H5File out(output_path.string(), H5F_ACC_TRUNC);
+        detail::write_format_version(out);
 
         {
             const hsize_t dims[2] = {static_cast<hsize_t>(total_signals),

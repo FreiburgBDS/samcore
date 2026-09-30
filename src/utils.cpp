@@ -40,12 +40,10 @@ std::vector<double> kurt(const array2d<float>& data) {
 }
 
 std::vector<double> time_index(double tzero, double delta_t, size_t num) {
-    if (num == 0) return {};
-    if (num == 1) return {tzero};
+    // End-exclusive, sample-spaced index: tzero + i * delta_t for i < num.
     std::vector<double> out(num);
     for (size_t i = 0; i < num; ++i) {
-        out[i] = tzero + delta_t * static_cast<double>(i) /
-                              static_cast<double>(num - 1);
+        out[i] = tzero + delta_t * static_cast<double>(i);
     }
     return out;
 }
@@ -63,6 +61,12 @@ std::pair<std::vector<double>, std::vector<double>> fft_spec(
         freqs[k] = static_cast<double>(k) / (d * static_cast<double>(n));
     }
     return {std::move(mag), std::move(freqs)};
+}
+
+std::pair<array2d<float>, std::vector<float>> fft_spectrum(
+    const array2d<float>& data, double d) {
+    signal::spectrum_result res = signal::fft_spectrum(data, d);
+    return {std::move(res.mag), std::move(res.f)};
 }
 
 std::vector<double> spectral_entropy(const array2d<float>& psd, double base) {

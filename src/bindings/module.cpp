@@ -10,6 +10,8 @@
 NB_MODULE(_samcore, m) {
     m.doc() = "samcore: C++ (libsamcore) backend for SAM data processing";
 
+    m.attr("FULL_SCALE") = full_scale;
+
     bind_header(m);
     bind_labels(m);
     bind_scan(m);
