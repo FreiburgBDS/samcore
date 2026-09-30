@@ -184,7 +184,8 @@ h5samd_lazy_handle read_h5samd_lazy(const std::filesystem::path& path) {
             const auto [rows, cols] = dataset_dims(dset);
             state->x_rows = rows;
             state->x_cols = cols;
-            state->x.emplace(std::move(dset));
+            state->x.emplace(file, std::move(dset), rows, cols,
+                             H5::PredType::NATIVE_FLOAT);
         }
 
         h5samd_lazy_handle handle;
@@ -198,15 +199,16 @@ h5samd_lazy_handle read_h5samd_lazy(const std::filesystem::path& path) {
         if (file.nameExists("Z")) {
             H5::DataSet dset = file.openDataSet("Z");
             state->z_cols = dataset_dims(dset).second;
-            state->z.emplace(std::move(dset));
+            state->z.emplace(file, std::move(dset), state->x_rows,
+                             state->z_cols, H5::PredType::NATIVE_FLOAT);
         }
         if (file.nameExists("V")) {
             H5::DataSet dset = file.openDataSet("V");
             state->v_cols = dataset_dims(dset).second;
-            state->v.emplace(std::move(dset));
+            state->v.emplace(file, std::move(dset), state->x_rows,
+                             state->v_cols, H5::PredType::NATIVE_FLOAT);
         }
 
-        state->file = std::move(file);
         handle.data = std::move(state);
         return handle;
     } catch (const H5::Exception&) {
@@ -217,13 +219,16 @@ h5samd_lazy_handle read_h5samd_lazy(const std::filesystem::path& path) {
 h5samd_lazy_data read_h5samd_lazy_data(h5samd_lazy_state& state) {
     h5samd_lazy_data out;
     if (state.x) {
-        out.x = detail::read_2d<float>(*state.x, H5::PredType::NATIVE_FLOAT);
+        out.x = array2d<float>(state.x->rows(), state.x->cols());
+        state.x->read_rows(0, state.x->rows(), out.x.data());
     }
     if (state.z) {
-        out.z = detail::read_2d<float>(*state.z, H5::PredType::NATIVE_FLOAT);
+        out.z = array2d<float>(state.z->rows(), state.z->cols());
+        state.z->read_rows(0, state.z->rows(), out.z->data());
     }
     if (state.v) {
-        out.v = detail::read_2d<float>(*state.v, H5::PredType::NATIVE_FLOAT);
+        out.v = array2d<float>(state.v->rows(), state.v->cols());
+        state.v->read_rows(0, state.v->rows(), out.v->data());
     }
     return out;
 }
@@ -342,8 +347,10 @@ void convert_h5sam_to_h5samd(
                     "convert_h5sam_to_h5samd: missing data handle for " +
                     path.string());
             }
-            scan_counts.push_back(static_cast<std::int64_t>(meta.data->rows));
-            scanlens.push_back(static_cast<std::int32_t>(meta.data->cols));
+            scan_counts.push_back(
+                static_cast<std::int64_t>(meta.data->reader.rows()));
+            scanlens.push_back(
+                static_cast<std::int32_t>(meta.data->reader.cols()));
             cube_shapes.emplace_back(static_cast<std::int32_t>(meta.header.nlines),
                                      static_cast<std::int32_t>(meta.header.scanspline));
             cube_resolutions.push_back(meta.header.resolution);

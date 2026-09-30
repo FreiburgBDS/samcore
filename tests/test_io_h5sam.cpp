@@ -176,11 +176,13 @@ TEST(io_h5sam, WriteNonOwningView) {
     std::filesystem::remove(out);
 }
 
-TEST(io_h5sam, MmapLazyLoad) {
+TEST(io_h5sam, LazyLoad) {
     if (!std::filesystem::exists(h5sam_path())) GTEST_SKIP() << "no h5sam testdata";
-    // mmap mode: metadata available without loading the data
+    // lazy mode: metadata available without loading the data
     samcore::sam_scan lazy = samcore::sam_scan::from_file(h5sam_path(), true);
     EXPECT_FALSE(lazy.loaded());
+    EXPECT_FALSE(lazy.materialized());
+    EXPECT_EQ(lazy.backing(), "lazy");
     EXPECT_EQ(lazy.num_scans(),
               static_cast<size_t>(lazy.header().nlines * lazy.header().scanspline));
     EXPECT_EQ(lazy.scanlen(), static_cast<size_t>(lazy.header().scanlen));
@@ -189,6 +191,7 @@ TEST(io_h5sam, MmapLazyLoad) {
     // accessing data materializes it
     auto& d = lazy.data();
     EXPECT_TRUE(lazy.loaded());
+    EXPECT_EQ(lazy.backing(), "eager");
     (void)d;
 
     // results identical to an eager load
@@ -196,6 +199,103 @@ TEST(io_h5sam, MmapLazyLoad) {
     EXPECT_EQ(lazy.data(), eager.data());
     EXPECT_EQ(lazy.header(), eager.header());
     EXPECT_EQ(lazy.samlabels().labels(), eager.samlabels().labels());
+}
+
+TEST(io_h5sam, LazyPagedRowReads) {
+    if (!std::filesystem::exists(h5sam_path())) GTEST_SKIP() << "no h5sam testdata";
+    auto eager = sam_scan::from_file(h5sam_path());
+    auto lazy = sam_scan::from_file(h5sam_path(), true);
+    ASSERT_FALSE(lazy.loaded());
+    EXPECT_EQ(lazy.blocks_read(), 0u);
+
+    const auto row = [&](size_t i) {
+        return std::vector<std::int8_t>(eager.data()[i].begin(),
+                                        eager.data()[i].end());
+    };
+
+    // Single-row reads match the eager data and never materialize.
+    EXPECT_EQ(lazy.read_row(3), row(3));
+    EXPECT_FALSE(lazy.loaded());
+    EXPECT_GE(lazy.blocks_read(), 1u);
+
+    // Repeated access to the same row reuses the decoded block.
+    const size_t after_first = lazy.blocks_read();
+    EXPECT_EQ(lazy.read_row(3), row(3));
+    EXPECT_EQ(lazy.read_row(3), row(3));
+    EXPECT_EQ(lazy.blocks_read(), after_first);
+
+    // Consecutive range.
+    auto rows = lazy.read_rows(0, 4);
+    ASSERT_EQ(rows.rows(), 4u);
+    for (size_t i = 0; i < 4; ++i) {
+        EXPECT_EQ(std::vector<std::int8_t>(rows[i].begin(), rows[i].end()),
+                  row(i));
+    }
+
+    // Arbitrary rows, including one from a far-away block.
+    const std::vector<std::int64_t> idx{0, 7, 2,
+                                        static_cast<std::int64_t>(
+                                            lazy.num_scans() - 1)};
+    auto sel = lazy.read_selected(idx);
+    ASSERT_EQ(sel.rows(), idx.size());
+    for (size_t i = 0; i < idx.size(); ++i) {
+        EXPECT_EQ(std::vector<std::int8_t>(sel[i].begin(), sel[i].end()),
+                  row(static_cast<size_t>(idx[i])));
+    }
+    EXPECT_FALSE(lazy.loaded());
+
+    // Read accounting: the few distinct blocks touched so far bound the
+    // number of disk decodes (no per-row re-reads).
+    EXPECT_LE(lazy.blocks_read(), 4u);
+
+    // Empty selection: correct width, no extra reads.
+    const size_t before_empty = lazy.blocks_read();
+    auto none = lazy.read_selected({});
+    EXPECT_EQ(none.rows(), 0u);
+    EXPECT_EQ(none.cols(), lazy.scanlen());
+    EXPECT_EQ(lazy.blocks_read(), before_empty);
+
+    // Bounds checks.
+    EXPECT_THROW(lazy.read_row(lazy.num_scans()), std::out_of_range);
+    EXPECT_THROW(lazy.read_rows(lazy.num_scans() - 1, 2), std::out_of_range);
+    EXPECT_THROW(lazy.read_selected({static_cast<std::int64_t>(
+                     lazy.num_scans())}),
+                 std::out_of_range);
+}
+
+TEST(io_h5sam, LazyImageReductionsStream) {
+    if (!std::filesystem::exists(h5sam_path())) GTEST_SKIP() << "no h5sam testdata";
+    auto eager = sam_scan::from_file(h5sam_path());
+    auto lazy = sam_scan::from_file(h5sam_path(), true);
+    ASSERT_FALSE(lazy.loaded());
+
+    const auto emax = eager.image_max();
+    const auto eabs = eager.image_absmax();
+    const auto epow = eager.image_power();
+
+    EXPECT_EQ(lazy.image_max(), emax);
+    EXPECT_EQ(lazy.image_absmax(), eabs);
+    EXPECT_EQ(lazy.image_power(), epow);
+    // Streaming reductions never materialize the cube.
+    EXPECT_FALSE(lazy.loaded());
+    EXPECT_EQ(lazy.backing(), "lazy");
+}
+
+TEST(io_h5sam, EagerRowReadsCopy) {
+    if (!std::filesystem::exists(h5sam_path())) GTEST_SKIP() << "no h5sam testdata";
+    auto eager = sam_scan::from_file(h5sam_path());
+    ASSERT_TRUE(eager.loaded());
+    EXPECT_EQ(eager.backing(), "eager");
+    EXPECT_EQ(eager.blocks_read(), 0u);
+    EXPECT_EQ(eager.read_row(1),
+              std::vector<std::int8_t>(eager.data()[1].begin(),
+                                       eager.data()[1].end()));
+    auto rows = eager.read_rows(1, 2);
+    ASSERT_EQ(rows.rows(), 2u);
+    EXPECT_EQ(std::vector<std::int8_t>(rows[0].begin(), rows[0].end()),
+              std::vector<std::int8_t>(eager.data()[1].begin(),
+                                       eager.data()[1].end()));
+    EXPECT_THROW(eager.read_row(eager.num_scans()), std::out_of_range);
 }
 
 TEST(io_h5sam, FormatVersionAttributes) {

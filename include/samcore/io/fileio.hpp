@@ -32,7 +32,7 @@ void write_h5sam(const std::filesystem::path& path,
                  const std::optional<std::vector<std::int32_t>>& starts);
 
 // Partial row read of a .h5sam file's data dataset (first..first+count).
-// Partial row read (counterpart of a lazy/mmap mode).
+// Partial row read (counterpart of a lazy-mode scan).
 [[nodiscard]] array2d<std::int8_t> read_h5sam_rows(
     const std::filesystem::path& path, size_t first, size_t count);
 

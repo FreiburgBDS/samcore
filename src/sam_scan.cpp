@@ -145,11 +145,11 @@ void rotate_rows_inplace(array2d<std::int8_t>& data, size_t total, size_t sl,
 
 } // namespace
 
-sam_scan sam_scan::from_file(const std::filesystem::path& path, bool mmap) {
+sam_scan sam_scan::from_file(const std::filesystem::path& path, bool lazy) {
     const std::string ext = extension_lower(path);
     sam_scan scan;
     if (ext == ".h5sam") {
-        if (mmap) {
+        if (lazy) {
             auto res = io::read_h5sam_lazy(path);
             scan.header_ = std::move(res.header);
             scan.labels_ = std::move(res.labels);
@@ -259,48 +259,77 @@ array2d<T> reduce_image(const array2d<std::int8_t>& data, size_t nlines,
     return img;
 }
 
+// Same, but streaming row blocks from a lazy (paged) reader: the full cube is
+// never materialized.
+template <typename T, typename F>
+array2d<T> reduce_image_paged(io::paged_reader<std::int8_t>& reader,
+                              size_t nlines, size_t ncols, const F& reduce) {
+    const size_t n = reader.rows();
+    const size_t block = std::max<size_t>(1, reader.block_rows());
+    array2d<T> img(nlines, ncols);
+    std::vector<std::int8_t> buf(block * reader.cols());
+    for (size_t first = 0; first < n; first += block) {
+        const size_t count = std::min(block, n - first);
+        reader.read_rows(first, count, buf.data());
+        for (size_t r = 0; r < count; ++r) {
+            const size_t i = first + r;
+            img[i / ncols][i % ncols] = reduce(std::span<const std::int8_t>(
+                buf.data() + r * reader.cols(), reader.cols()));
+        }
+    }
+    return img;
+}
+
+std::int8_t row_max(std::span<const std::int8_t> row) {
+    return *std::max_element(row.begin(), row.end());
+}
+
+// absmax = max(|min|, |max|), saturated to int8 (abs(-128) -> 127).
+std::int8_t row_absmax(std::span<const std::int8_t> row) {
+    std::int8_t mx = row[0], mn = row[0];
+    for (auto v : row) {
+        mx = std::max(mx, v);
+        mn = std::min(mn, v);
+    }
+    const int am = std::max(std::abs(static_cast<int>(mx)),
+                            std::abs(static_cast<int>(mn)));
+    return static_cast<std::int8_t>(std::min(am, 127));
+}
+
+// power: sum of squares, float32.
+float row_power(std::span<const std::int8_t> row) {
+    double acc = 0.0;
+    for (auto v : row) acc += static_cast<double>(v) * v;
+    return static_cast<float>(acc);
+}
+
 } // namespace
 
 array2d<std::int8_t> sam_scan::image_max() const {
+    const size_t nl = static_cast<size_t>(header_.nlines);
+    const size_t nc = static_cast<size_t>(header_.scanspline);
+    if (lazy_) return reduce_image_paged<std::int8_t>(lazy_->reader, nl, nc,
+                                                      row_max);
     ensure_loaded();
-    return reduce_image<std::int8_t>(
-        data_, static_cast<size_t>(header_.nlines),
-        static_cast<size_t>(header_.scanspline),
-        [](std::span<const std::int8_t> row) {
-            return *std::max_element(row.begin(), row.end());
-        });
+    return reduce_image<std::int8_t>(data_, nl, nc, row_max);
 }
 
 array2d<std::int8_t> sam_scan::image_absmax() const {
+    const size_t nl = static_cast<size_t>(header_.nlines);
+    const size_t nc = static_cast<size_t>(header_.scanspline);
+    if (lazy_) return reduce_image_paged<std::int8_t>(lazy_->reader, nl, nc,
+                                                      row_absmax);
     ensure_loaded();
-    // absmax = max(|min|, |max|), saturated to int8 (abs(-128) -> 127) so
-    // the result stays in the same 8-bit domain as the input.
-    return reduce_image<std::int8_t>(
-        data_, static_cast<size_t>(header_.nlines),
-        static_cast<size_t>(header_.scanspline),
-        [](std::span<const std::int8_t> row) {
-            std::int8_t mx = row[0], mn = row[0];
-            for (auto v : row) {
-                mx = std::max(mx, v);
-                mn = std::min(mn, v);
-            }
-            const int am = std::max(std::abs(static_cast<int>(mx)),
-                                    std::abs(static_cast<int>(mn)));
-            return static_cast<std::int8_t>(std::min(am, 127));
-        });
+    return reduce_image<std::int8_t>(data_, nl, nc, row_absmax);
 }
 
 array2d<float> sam_scan::image_power() const {
+    const size_t nl = static_cast<size_t>(header_.nlines);
+    const size_t nc = static_cast<size_t>(header_.scanspline);
+    if (lazy_) return reduce_image_paged<float>(lazy_->reader, nl, nc,
+                                                row_power);
     ensure_loaded();
-    // power: sum of squares, float32
-    return reduce_image<float>(
-        data_, static_cast<size_t>(header_.nlines),
-        static_cast<size_t>(header_.scanspline),
-        [](std::span<const std::int8_t> row) {
-            double acc = 0.0;
-            for (auto v : row) acc += static_cast<double>(v) * v;
-            return static_cast<float>(acc);
-        });
+    return reduce_image<float>(data_, nl, nc, row_power);
 }
 
 array2d<float> sam_scan::normalized_data() const {
@@ -877,8 +906,8 @@ void sam_scan::time_range_select_ip(double start_time, double end_time) {
 
 sam_scan::sam_scan() = default;
 
-sam_scan::sam_scan(const std::string& path, bool mmap) {
-    *this = from_file(path, mmap);
+sam_scan::sam_scan(const std::string& path, bool lazy) {
+    *this = from_file(path, lazy);
 }
 
 sam_scan::~sam_scan() = default;
@@ -907,18 +936,69 @@ sam_scan& sam_scan::operator=(const sam_scan& o) {
 }
 
 size_t sam_scan::num_scans() const noexcept {
-    return lazy_ ? lazy_->rows : data_.rows();
+    return lazy_ ? lazy_->reader.rows() : data_.rows();
+}
+
+std::vector<std::int8_t> sam_scan::read_row(size_t index) const {
+    if (index >= num_scans()) {
+        throw std::out_of_range("read_row: scan index out of range.");
+    }
+    if (!lazy_) {
+        const auto row = data_[index];
+        return std::vector<std::int8_t>(row.begin(), row.end());
+    }
+    return lazy_->reader.read_row(index);
+}
+
+array2d<std::int8_t> sam_scan::read_rows(size_t first, size_t count) const {
+    if (first + count > num_scans()) {
+        throw std::out_of_range("read_rows: scan range out of bounds.");
+    }
+    if (!lazy_) {
+        array2d<std::int8_t> out(count, data_.cols());
+        for (size_t r = 0; r < count; ++r) {
+            std::memcpy(out[r].data(), data_[first + r].data(), data_.cols());
+        }
+        return out;
+    }
+    array2d<std::int8_t> out(count, lazy_->reader.cols());
+    if (count > 0) {
+        lazy_->reader.read_rows(first, count, out.data());
+    }
+    return out;
+}
+
+size_t sam_scan::blocks_read() const noexcept {
+    return lazy_ ? lazy_->reader.blocks_read() : 0;
+}
+
+array2d<std::int8_t> sam_scan::read_selected(
+    const std::vector<std::int64_t>& indices) const {
+    if (!lazy_) {
+        array2d<std::int8_t> out(indices.size(), data_.cols());
+        for (size_t i = 0; i < indices.size(); ++i) {
+            const auto row = static_cast<size_t>(indices[i]);
+            if (row >= data_.rows()) {
+                throw std::out_of_range("read_selected: row out of range.");
+            }
+            std::memcpy(out[i].data(), data_[row].data(), data_.cols());
+        }
+        return out;
+    }
+    array2d<std::int8_t> out(indices.size(), lazy_->reader.cols());
+    if (!indices.empty()) {
+        lazy_->reader.read_selected(indices, out.data());
+    }
+    return out;
 }
 
 void sam_scan::ensure_loaded() const {
     if (!lazy_) return;
-    H5::DataSpace space = lazy_->dset.getSpace();
-    hsize_t dims[2];
-    space.getSimpleExtentDims(dims);
-    array2d<std::int8_t> loaded(static_cast<size_t>(dims[0]),
-                                static_cast<size_t>(dims[1]));
-    if (dims[0] > 0 && dims[1] > 0) {
-        lazy_->dset.read(loaded.data(), H5::PredType::NATIVE_INT8);
+    const size_t rows = lazy_->reader.rows();
+    const size_t cols = lazy_->reader.cols();
+    array2d<std::int8_t> loaded(rows, cols);
+    if (rows > 0 && cols > 0) {
+        lazy_->reader.read_rows(0, rows, loaded.data());
     }
     data_ = std::move(loaded);
     lazy_.reset(); // closes the file handle

@@ -17,8 +17,8 @@ C-scan images, spectra and ready-to-train machine-learning datasets.
 ### Features
 
 - **`.h5sam` / `.h5samd` file formats**: native HDF5-based I/O for single
-  acquisition cubes and pooled datasets, including lazy/memory-mapped reading
-  of signal data (`SAMScan(path, mmap=True)`).
+  acquisition cubes and pooled datasets, including lazy reading of signal
+  data (`SAMScan(path, lazy=True)`).
 - **C-scan imaging**: reduce every A-scan to one pixel
   (`scan.image("max" | "absmax" | "power")`) and normalize the raw int8
   signals to `[-1, 1)` (`scan.normalized_data()`).
@@ -55,8 +55,8 @@ The two formats are the core of the package:
   `transducer_through`, `cellid`, `downsample_factor`, plus arbitrary extra
   attributes, which are preserved on round-trip.
 - `data`: the raw int8 signals, shape `(nlines * scanspline, scanlen)`,
-  gzip-compressed.  With `mmap=True` the array stays in the file until first
-  access.
+  gzip-compressed.  With `lazy=True` only the requested rows are read;
+  `data` materializes the full array on first access.
 - `labels` / `label_names`: optional per-scan integer labels and their names.
 - `starts`: optional int32 per-scan start index for time-aligned or
   Z-gated data (`-1` marks an unaligned scan).

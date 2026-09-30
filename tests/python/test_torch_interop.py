@@ -90,3 +90,36 @@ def test_torch_dataset_use_z_and_validation():
         TorchDataset(plain, split="train", use_z=True)
     with pytest.raises(ValueError):
         TorchDataset(plain, split="bogus")
+
+
+def test_torch_dataset_streams_from_lazy_dataset(tmp_path):
+    ds = _dataset()
+    ds.transform(lambda d: d[:, :5])
+    path = str(tmp_path / "lazy_interop.h5samd")
+    ds.save(path)
+
+    lazy = SAMDataset.load(path, lazy=True)
+    assert lazy.loaded is False
+    td = TorchDataset(lazy, split="train", use_z=False)
+    # Construction must not materialize X/Z.
+    assert lazy.loaded is False
+    x, y, meta = td[0]
+    row = int(lazy.train_indices[0])
+    np.testing.assert_allclose(x.numpy(), ds.X[row])
+    assert int(y) == int(ds.labels.labels[row])
+    assert lazy.loaded is False  # per-item reads stay paged
+
+    # use_z streams Z rows as well.
+    td_z = TorchDataset(lazy, split="train", use_z=True,
+                        with_spatial=False)
+    xz, _ = td_z[1]
+    row = int(lazy.train_indices[1])
+    np.testing.assert_allclose(xz.numpy(), ds.Z[row])
+    assert lazy.loaded is False
+
+    # A DataLoader over the lazy dataset keeps the data on disk too.
+    loader = TorchDataLoader(lazy, split="train", batch_size=2,
+                             shuffle=False, use_z=False)
+    xb, yb, _ = next(iter(loader))
+    assert tuple(xb.shape) == (2, ds.maxlen)
+    assert lazy.loaded is False

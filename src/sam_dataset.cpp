@@ -14,7 +14,7 @@ sam_dataset::sam_dataset(const sam_dataset& o) { *this = o; }
 
 sam_dataset& sam_dataset::operator=(const sam_dataset& o) {
     if (this == &o) return *this;
-    o.ensure_loaded(); // a mmap-mode source is materialized once, here
+    o.ensure_loaded(); // a lazy-mode source is materialized once, here
     x_ = o.x_;
     labels_ = o.labels_;
     cube_shapes_ = o.cube_shapes_;
@@ -42,6 +42,34 @@ void sam_dataset::ensure_loaded() const {
     z_ = std::move(data.z);
     v_ = std::move(data.v);
     lazy_.reset(); // closes the file handle
+}
+
+array2d<float> sam_dataset::read_rows(
+    const std::vector<std::int64_t>& indices, bool use_z) const {
+    if (use_z && !has_z()) {
+        throw std::runtime_error("Z has not been built yet.");
+    }
+    const size_t cols = use_z ? num_features() : maxlen();
+    array2d<float> out(indices.size(), cols);
+    if (!lazy_) {
+        const array2d<float>& src = use_z ? *z_ : x_;
+        for (size_t i = 0; i < indices.size(); ++i) {
+            const auto row = static_cast<size_t>(indices[i]);
+            if (row >= src.rows()) {
+                throw std::out_of_range("read_rows: row index out of range.");
+            }
+            std::memcpy(out[i].data(), src[row].data(), cols * sizeof(float));
+        }
+        return out;
+    }
+    if (indices.empty()) return out;
+    auto& reader = use_z ? *lazy_->z : *lazy_->x;
+    reader.read_selected(indices, out.data());
+    return out;
+}
+
+size_t sam_dataset::blocks_read() const noexcept {
+    return (lazy_ && lazy_->x) ? lazy_->x->blocks_read() : 0;
 }
 
 const array2d<float>& sam_dataset::X() const {
@@ -187,8 +215,8 @@ void sam_dataset::save(const std::filesystem::path& path) const {
                      scanlens_, unsupervised_, z_, v_);
 }
 
-sam_dataset sam_dataset::load(const std::filesystem::path& path, bool mmap) {
-    if (mmap) {
+sam_dataset sam_dataset::load(const std::filesystem::path& path, bool lazy) {
+    if (lazy) {
         io::h5samd_lazy_handle res = io::read_h5samd_lazy(path);
         sam_dataset ds;
         ds.labels_ = std::move(res.labels);

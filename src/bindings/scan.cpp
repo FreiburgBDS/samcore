@@ -29,30 +29,47 @@ void bind_scan(nb::module_& m) {
                                  "    Source file path (empty when built from "
                                  "data).")
         .def(nb::init<>())
-        .def(nb::init<std::string, bool>(),
-             nb::arg("path"), nb::arg("mmap") = false,
+        .def("__init__",
+             [](sam_scan* self, const std::string& path, bool lazy,
+                nb::object mmap) {
+                 new (self) sam_scan(path, lazy_flag(lazy, mmap));
+             },
+             nb::arg("path"), nb::arg("lazy") = false,
+             nb::arg("mmap") = nb::none(),
              "Load a SAM scan from a .h5sam file.\n\n"
                      "Parameters\n"
                      "----------\n"
                      "path : str\n"
                      "    Path to a .h5sam file.\n"
+                     "lazy : bool, optional\n"
+                     "    With True the signal data stays on disk and is "
+                     "decoded in cached row blocks on demand; header, labels "
+                     "and starts are always loaded eagerly.  The data is "
+                     "chunked and compressed, so this is paged lazy reading, "
+                     "not memory mapping.\n"
                      "mmap : bool, optional\n"
-                     "    With True the signal data stays on disk until first "
-                     "accessed (lazy loading).  In-memory operations require "
-                     "the data to be loaded.")
+                     "    Deprecated alias of ``lazy``; emits a "
+                     "DeprecationWarning because memory mapping is not "
+                     "possible for compressed HDF5 data.")
         .def_static("from_file",
-                    [](const std::string& path, bool mmap) {
-                        return sam_scan::from_file(path, mmap);
+                    [](const std::string& path, bool lazy, nb::object mmap) {
+                        return sam_scan::from_file(path,
+                                                   lazy_flag(lazy, mmap));
                     },
-                    nb::arg("path"), nb::arg("mmap") = false,
+                    nb::arg("path"), nb::arg("lazy") = false,
+                    nb::arg("mmap") = nb::none(),
                     "Load a SAM scan from a .h5sam file.\n\n"
                             "Parameters\n"
                             "----------\n"
                             "path : str\n"
                             "    Path to a .h5sam file.\n"
+                            "lazy : bool, optional\n"
+                            "    Keep the signal data on disk and decode it "
+                            "in cached row blocks on demand (paged lazy "
+                            "reading; not memory mapping).\n"
                             "mmap : bool, optional\n"
-                            "    Keep the signal data on disk until first "
-                            "accessed (lazy loading).")
+                            "    Deprecated alias of ``lazy``; emits a "
+                            "DeprecationWarning.")
         .def_static("from_data",
                     [](in_i8_2 data, sam_header header,
                        std::optional<std::vector<std::int32_t>> starts,
@@ -177,10 +194,39 @@ void bind_scan(nb::module_& m) {
                      [](sam_scan& s, std::string p) { s.path() = std::move(p); },
                      "Source file path (empty if built from data).")
         .def_prop_ro("loaded", [](const sam_scan& s) { return s.loaded(); },
-                     "Whether the signal data has been loaded into "
-                             "memory (mmap mode).")
+                     "Whether the signal data has been loaded into memory "
+                             "(false in lazy mode until materialized).")
+        .def_prop_ro("materialized",
+                     [](const sam_scan& s) { return s.materialized(); },
+                     "Alias of ``loaded``: True once the signal data is in "
+                             "memory.")
+        .def_prop_ro("backing", [](const sam_scan& s) { return s.backing(); },
+                     "``'eager'`` or ``'lazy'`` depending on how the scan "
+                             "was loaded.")
+        .def_prop_ro("blocks_read",
+                     [](const sam_scan& s) { return s.blocks_read(); },
+                     "Number of data blocks decoded from disk so far (0 for "
+                             "an eager scan); read accounting for lazy "
+                             "access.")
         .def("load", [](sam_scan& s) { without_gil([&] { s.load(); }); },
-             "Load the signal data into memory (mmap mode).")
+             "Materialize the signal data into memory (no-op when already "
+                     "loaded).")
+        .def("read_row",
+             [](sam_scan& s, size_t index) {
+                 return to_numpy(s.read_row(index));
+             },
+             nb::arg("index"),
+             "Read one A-scan without materializing the scan.\n\n"
+                     "In lazy mode only the block containing the row is "
+                     "decoded from disk; in eager mode a copy of the row is "
+                     "returned.")
+        .def("read_rows",
+             [](sam_scan& s, size_t first, size_t count) {
+                 return to_numpy(s.read_rows(first, count));
+             },
+             nb::arg("first"), nb::arg("count"),
+             "Read ``count`` consecutive A-scans starting at ``first`` "
+                     "without materializing the scan (owned copy).")
         .def_prop_ro("nlines", [](const sam_scan& s) { return s.nlines(); },
                      "Number of grid lines (rows).")
         .def_prop_ro("rows", [](const sam_scan& s) { return s.nlines(); },
@@ -198,36 +244,58 @@ void bind_scan(nb::module_& m) {
         }, "Grid shape as ``(nlines, cols)``.")
         .def("__len__", [](const sam_scan& s) { return s.num_scans(); })
         .def("__getitem__",
-             [](sam_scan& s, std::int64_t i) {
+             [](sam_scan& s, std::int64_t i) -> nb::object {
                  auto n = static_cast<std::int64_t>(s.num_scans());
                  if (i < 0) i += n;
                  if (i < 0 || i >= n) {
                      throw std::out_of_range("scan index out of range");
                  }
-                 auto row = s.data()[static_cast<size_t>(i)];
-                 return nb::ndarray<nb::numpy, std::int8_t>(row.data(),
-                                                            {row.size()});
+                 const size_t index = static_cast<size_t>(i);
+                 if (!s.loaded()) {
+                     return to_numpy(s.read_row(index));
+                 }
+                 auto row = s.data()[index];
+                 return to_numpy_view(nb::ndarray<nb::numpy, std::int8_t>(
+                     row.data(), {row.size()}));
              },
              nb::rv_policy::reference, nb::keep_alive<1, 0>())
         .def("__getitem__",
-             [](sam_scan& s, nb::slice sl) {
-                 // step == 1 returns a zero-copy strided 2-D view, other
-                 // steps copy the selected rows.
+             [](sam_scan& s, nb::slice sl) -> nb::object {
+                 // Eager scans: step == 1 returns a zero-copy strided 2-D
+                 // view, other steps copy the selected rows.  Lazy scans
+                 // decode only the requested blocks and return an owned
+                 // array.
                  const auto n = s.num_scans();
                  auto [start, stop, step, len] = sl.compute(n);
+                 const size_t first = static_cast<size_t>(start);
+                 if (!s.loaded()) {
+                     if (len == 0) {
+                         // read_selected({}) yields a (0, samples) array
+                         // without decoding anything.
+                         return to_numpy(s.read_selected({}));
+                     }
+                     if (step == 1) {
+                         return to_numpy(s.read_rows(first, len));
+                     }
+                     std::vector<std::int64_t> indices(len);
+                     for (size_t i = 0; i < len; ++i) {
+                         indices[i] = static_cast<std::int64_t>(
+                             first + i * static_cast<size_t>(step));
+                     }
+                     return to_numpy(s.read_selected(indices));
+                 }
                  auto& d = s.data();
                  const size_t cols = d.cols();
                  if (len == 0) {
-                     return nb::ndarray<nb::numpy, std::int8_t>(
-                         d.data(), {0, cols});
+                     return to_numpy_view(nb::ndarray<nb::numpy, std::int8_t>(
+                         d.data(), {0, cols}));
                  }
-                 const size_t first = static_cast<size_t>(start);
                  if (step == 1) {
                      // zero-copy strided view (rv_policy::reference + keep_alive)
-                     return nb::ndarray<nb::numpy, std::int8_t>(
+                     return to_numpy_view(nb::ndarray<nb::numpy, std::int8_t>(
                          d.data() + first * cols, {len, cols}, nb::handle(),
                          {static_cast<std::int64_t>(cols),
-                          static_cast<std::int64_t>(sizeof(std::int8_t))});
+                          static_cast<std::int64_t>(sizeof(std::int8_t))}));
                  }
                  // non-unit step: copy the selected rows into an owned buffer
                  array2d<std::int8_t> out(len, cols);
@@ -236,39 +304,44 @@ void bind_scan(nb::module_& m) {
                                  d[first + i * static_cast<size_t>(step)].data(),
                                  cols);
                  }
-                 auto* buf = new array2d<std::int8_t>(std::move(out));
-                 nb::capsule owner(
-                     buf, [](void* p) noexcept {
-                         delete static_cast<array2d<std::int8_t>*>(p);
-                     });
-                 return nb::ndarray<nb::numpy, std::int8_t>(
-                     buf->data(), {buf->rows(), buf->cols()}, owner);
+                 return to_numpy(std::move(out));
              },
              nb::rv_policy::reference, nb::keep_alive<1, 0>())
         .def("__getitem__",
-             [](sam_scan& s, std::tuple<std::int64_t, std::int64_t> idx) {
+             [](sam_scan& s, std::tuple<std::int64_t, std::int64_t> idx)
+                 -> nb::object {
                  const auto [l, c] = idx;
                  if (l < 0 || c < 0 || l >= s.nlines() || c >= s.cols()) {
                      throw std::out_of_range("scan index out of range");
                  }
-                 auto row = s.data()[static_cast<size_t>(
-                     l * s.cols() + c)];
-                 return nb::ndarray<nb::numpy, std::int8_t>(row.data(),
-                                                            {row.size()});
+                 const size_t index = static_cast<size_t>(l * s.cols() + c);
+                 if (!s.loaded()) {
+                     return to_numpy(s.read_row(index));
+                 }
+                 auto row = s.data()[index];
+                 return to_numpy_view(nb::ndarray<nb::numpy, std::int8_t>(
+                     row.data(), {row.size()}));
              },
              nb::rv_policy::reference, nb::keep_alive<1, 0>())
         .def("scan",
-             [](sam_scan& s, size_t i) {
+             [](sam_scan& s, size_t i) -> nb::object {
+                 if (!s.loaded()) {
+                     return to_numpy(s.read_row(i));
+                 }
                  auto row = s.data()[i];
-                 return nb::ndarray<nb::numpy, std::int8_t>(row.data(),
-                                                            {row.size()});
+                 return to_numpy_view(nb::ndarray<nb::numpy, std::int8_t>(
+                     row.data(), {row.size()}));
              },
              nb::rv_policy::reference, nb::keep_alive<1, 0>())
         .def("scan",
-             [](sam_scan& s, std::int64_t l, std::int64_t c) {
-                 auto row = s.data()[static_cast<size_t>(l * s.cols() + c)];
-                 return nb::ndarray<nb::numpy, std::int8_t>(row.data(),
-                                                            {row.size()});
+             [](sam_scan& s, std::int64_t l, std::int64_t c) -> nb::object {
+                 const size_t index = static_cast<size_t>(l * s.cols() + c);
+                 if (!s.loaded()) {
+                     return to_numpy(s.read_row(index));
+                 }
+                 auto row = s.data()[index];
+                 return to_numpy_view(nb::ndarray<nb::numpy, std::int8_t>(
+                     row.data(), {row.size()}));
              },
              nb::rv_policy::reference, nb::keep_alive<1, 0>())
          .def("time",

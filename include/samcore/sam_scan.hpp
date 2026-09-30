@@ -45,15 +45,16 @@ public:
     sam_scan& operator=(const sam_scan&);
 
     // Load from a .h5sam file (same as from_file).
-    explicit sam_scan(const std::string& path, bool mmap = false);
+    explicit sam_scan(const std::string& path, bool lazy = false);
 
-    // Load a .h5sam file.  With mmap = true the signal data stays on
-    // disk (the file handle is kept open) and is read on first access;
-    // header, labels and starts are always loaded eagerly.  Throws
-    // std::invalid_argument for other extensions and std::runtime_error
-    // for IO/parse errors.
+    // Load a .h5sam file.  With lazy = true the signal data stays on disk
+    // (the file handle is kept open) and is decoded in cached row blocks on
+    // first access; header, labels and starts are always loaded eagerly.
+    // Note: the data is chunked + compressed, so this is paged lazy reading,
+    // not memory mapping.  Throws std::invalid_argument for other extensions
+    // and std::runtime_error for IO/parse errors.
     [[nodiscard]] static sam_scan from_file(const std::filesystem::path& path,
-                                            bool mmap = false);
+                                            bool lazy = false);
 
     // Build from data + header with shape validation
     // (data.ndim == 2, rows == nlines*scanspline, cols == scanlen).
@@ -69,12 +70,29 @@ public:
     [[nodiscard]] std::string& path() noexcept { return path_; }
 
     // Whether the signal data has been loaded into memory (false while a
-    // mmap-mode scan is still backed by the on-disk HDF5 file).
+    // lazy-mode scan is still backed by the on-disk HDF5 file).
     [[nodiscard]] bool loaded() const noexcept { return lazy_ == nullptr; }
+    // Alias of loaded(); backing() is "eager" or "lazy".
+    [[nodiscard]] bool materialized() const noexcept { return loaded(); }
+    [[nodiscard]] std::string backing() const {
+        return lazy_ ? "lazy" : "eager";
+    }
 
     // Materialize the signal data (no-op when already loaded or not in
-    // mmap mode).  Every data accessor calls this implicitly.
+    // lazy mode).  Every data accessor calls this implicitly.
     void load() const { ensure_loaded(); }
+
+    // Row access that never materializes a lazy scan: owned copies are
+    // returned, and only the blocks containing the requested rows are
+    // decoded from disk.
+    [[nodiscard]] std::vector<std::int8_t> read_row(size_t index) const;
+    [[nodiscard]] array2d<std::int8_t> read_rows(size_t first,
+                                                 size_t count) const;
+    // Arbitrary rows (one row per index), owned copy, without materializing.
+    [[nodiscard]] array2d<std::int8_t> read_selected(
+        const std::vector<std::int64_t>& indices) const;
+    // Number of data blocks decoded from disk so far (0 when materialized).
+    [[nodiscard]] size_t blocks_read() const noexcept;
 
     [[nodiscard]] const array2d<std::int8_t>& data() const {
         ensure_loaded();

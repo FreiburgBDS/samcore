@@ -56,23 +56,57 @@ nb::class_<sam_dataset>(m, "SAMDataset", nb::dynamic_attr(),
                      "    When True labels are discarded; when False labels "
                      "are required.  None (default) auto-detects: supervised "
                      "only when all scans are labeled.")
-        .def_static("load", [](const std::string& path, bool mmap) {
-            return without_gil([&] { return sam_dataset::load(path, mmap); });
-        }, nb::arg("path"), nb::arg("mmap") = false,
+        .def_static("load",
+                    [](const std::string& path, bool lazy, nb::object mmap) {
+                        // Resolve the alias before releasing the GIL: emitting
+                        // the DeprecationWarning touches Python.
+                        const bool use_lazy = lazy_flag(lazy, mmap);
+                        return without_gil([&] {
+                            return sam_dataset::load(path, use_lazy);
+                        });
+                    },
+                    nb::arg("path"), nb::arg("lazy") = false,
+                    nb::arg("mmap") = nb::none(),
            "Load a dataset from a .h5samd file.\n\n"
            "Parameters\n"
            "----------\n"
            "path : str\n"
            "    Path to the .h5samd file.\n"
+           "lazy : bool, optional\n"
+           "    With True X/Z/V stay on disk and are decoded in cached row "
+           "blocks on demand (paged lazy reading, not memory mapping); "
+           "metadata is always loaded eagerly.\n"
            "mmap : bool, optional\n"
-           "    With True the X/Z/V arrays stay on disk until first "
-           "accessed (lazy loading); metadata is always loaded eagerly.")
+           "    Deprecated alias of ``lazy``; emits a DeprecationWarning "
+           "because memory mapping is not possible for compressed HDF5 "
+           "data.")
         .def_prop_ro("loaded", [](const sam_dataset& d) { return d.loaded(); },
                      "Whether the dataset data has been loaded into memory "
-                     "(mmap mode).")
+                     "(false in lazy mode until materialized).")
+        .def_prop_ro("materialized",
+                     [](const sam_dataset& d) { return d.materialized(); },
+                     "Alias of ``loaded``: True once X/Z/V are in memory.")
+        .def_prop_ro("backing", [](const sam_dataset& d) { return d.backing(); },
+                     "``'eager'`` or ``'lazy'`` depending on how the "
+                     "dataset was loaded.")
+        .def_prop_ro("blocks_read",
+                     [](const sam_dataset& d) { return d.blocks_read(); },
+                     "Number of X blocks decoded from disk so far (0 for an "
+                     "eager dataset).")
         .def("materialize", [](sam_dataset& d) { without_gil([&] { d.load(); }); },
-             "Load the dataset data into memory (mmap mode).  No-op when "
-             "already loaded; every data accessor calls this implicitly.")
+             "Materialize X/Z/V into memory (no-op when already loaded).  "
+             "Every data accessor calls this implicitly.")
+        .def("_read_rows",
+             [](const sam_dataset& d, in_i64_1 indices, bool use_z) {
+                 std::vector<std::int64_t> idx(
+                     indices.data(), indices.data() + indices.shape(0));
+                 return to_numpy(without_gil(
+                     [&] { return d.read_rows(idx, use_z); }));
+             },
+             nb::arg("indices"), nb::arg("use_z") = false,
+             "Read selected rows of X (or Z with ``use_z=True``) without "
+             "materializing a lazy dataset; only the blocks containing those "
+             "rows are decoded.")
         .def("save", [](sam_dataset& d, const std::string& path) {
              without_gil([&] { d.save(path); });
          },

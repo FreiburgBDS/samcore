@@ -232,7 +232,7 @@ def test_time_range_select_preserves_starts_both_paths() -> None:
 
 
 @needs_data
-class TestMmapInPlaceContract:
+class TestLazyInPlaceContract:
     def test_not_in_place_materializes_and_is_independent(self) -> None:
         ops: List[Tuple[str, Op]] = [
             ("rotate", lambda h, ip: h.rotate(90, in_place=ip)),
@@ -241,7 +241,7 @@ class TestMmapInPlaceContract:
         ]
         for _, op in ops:
             eager = SAMScan(H5_PATH)
-            lazy = SAMScan(H5_PATH, mmap=True)
+            lazy = SAMScan(H5_PATH, lazy=True)
             r = op(lazy, False)
             assert r is not lazy
             assert r.loaded is True
@@ -252,7 +252,7 @@ class TestMmapInPlaceContract:
     def test_in_place_true_materializes_and_mutates(self) -> None:
         eager = SAMScan(H5_PATH)
         eager.rotate(90, in_place=True)
-        lazy = SAMScan(H5_PATH, mmap=True)
+        lazy = SAMScan(H5_PATH, lazy=True)
         r = lazy.rotate(90, in_place=True)
         assert r is lazy
         assert lazy.loaded is True

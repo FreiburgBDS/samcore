@@ -292,34 +292,50 @@ def batches(self: SAMDataset, split: str = "train", shuffle: bool = True,
     batch_size : int, optional
         Number of samples per batch.  Default 64.
 
+    Notes
+    -----
+    On a lazily loaded dataset (``SAMDataset.load(path, lazy=True)``) only
+    the rows of each batch are decoded from disk; ``X``/``Z`` are never
+    materialized.
+
     Yields
     ------
     tuple
         ``(X, y, spatial)`` for supervised datasets;
         ``(X, spatial)`` for unsupervised datasets.
     """
-    if use_z and self.Z is None:
+    if use_z is None:
+        use_z = self.num_features is not None
+    if use_z and self.num_features is None:
         raise RuntimeError("Z has not been built yet. Call transform() first.")
     indices = (self.train_indices.copy()
                if split == "train" else self.test_indices.copy())
     if shuffle:
         rng = np.random.default_rng(seed)
         rng.shuffle(indices)
-    if use_z is None:
-        use_z = self.Z is not None
-    data = self.Z if use_z else self.X
-    if data is None:
-        raise RuntimeError(
-            f"{'Z' if use_z else 'X'} is not available in the dataset.")
     # Provenance and labels are built once per epoch, not once per batch.
     spatial = self.spatial
     labels: Optional[NDArray[np.int8]] = None
     if not self.unsupervised:
         assert self.labels is not None
         labels = np.asarray(self.labels.labels)
+    materialized = self.loaded
+    data = None
+    if materialized:
+        data = self.Z if use_z else self.X
+        if data is None:
+            raise RuntimeError(
+                f"{'Z' if use_z else 'X'} is not available in the dataset.")
     for i in range(0, len(indices), batch_size):
         batch_idx = indices[i:i + batch_size]
-        Xb = data[batch_idx]
+        if materialized:
+            assert data is not None
+            Xb = data[batch_idx]
+        else:
+            # Lazy dataset: decode only this batch's rows from disk; the
+            # full X/Z arrays are never materialized.
+            Xb = self._read_rows(  # type: ignore[attr-defined]
+                np.asarray(batch_idx, dtype=np.int64), bool(use_z))
         if self.unsupervised:
             yield Xb, cast(np.recarray, spatial[batch_idx])
         else:

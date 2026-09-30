@@ -258,9 +258,10 @@ def test_handler_from_data_and_copy():
 
 
 @needs_data
-def test_mmap_lazy_load():
-    h = SAMScan(H5, mmap=True)
+def test_lazy_load():
+    h = SAMScan(H5, lazy=True)
     assert h.loaded is False
+    assert h.backing == "lazy"
     assert h.num_scans() == h.header.nlines * h.header.scanspline
     assert len(h.samlabels.labels) == h.num_scans()
     _ = h.data  # materialize
@@ -490,7 +491,7 @@ def test_format_version_attributes(tmp_path):
     with h5py.File(ds_path, "r+") as f:
         f.attrs["samcore_format_version"] = 999
     assert SAMDataset.load(ds_path).num_samples == ds.num_samples
-    assert SAMDataset.load(ds_path, mmap=True).num_samples == ds.num_samples
+    assert SAMDataset.load(ds_path, lazy=True).num_samples == ds.num_samples
 
 
 @needs_data

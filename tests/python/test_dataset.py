@@ -1566,7 +1566,7 @@ class TestConvertFromPaths:
         assert len(ds.cube_shapes) == 1
 
 
-# ── lazy (mmap) loading ─────────────────────────────────────────────────────
+# ── lazy (paged) loading ────────────────────────────────────────────────────
 
 class TestLazyLoad:
     @staticmethod
@@ -1578,10 +1578,13 @@ class TestLazyLoad:
         ds.save(path)
         return ds, path
 
-    def test_load_mmap_is_lazy(self, tmp_path):
+    def test_load_lazy_is_lazy(self, tmp_path):
         ds, path = self._saved(tmp_path)
-        lazy = SAMDataset.load(path, mmap=True)
+        lazy = SAMDataset.load(path, lazy=True)
         assert lazy.loaded is False
+        assert lazy.materialized is False
+        assert lazy.backing == "lazy"
+        assert lazy.blocks_read == 0
         assert lazy.num_samples == ds.num_samples
         assert lazy.maxlen == ds.maxlen
         assert lazy.num_features == 3
@@ -1592,35 +1595,89 @@ class TestLazyLoad:
 
         np.testing.assert_array_equal(lazy.X, ds.X)
         assert lazy.loaded is True
+        assert lazy.backing == "eager"
         np.testing.assert_array_equal(lazy.Z, ds.Z)
+
+    def test_lazy_paged_row_reads(self, tmp_path):
+        ds, path = self._saved(tmp_path)
+        lazy = SAMDataset.load(path, lazy=True)
+        idx = np.array([5, 0, 3, 5, 1], dtype=np.int64)
+        rows = lazy._read_rows(idx)
+        np.testing.assert_array_equal(rows, ds.X[idx])
+        assert lazy.loaded is False
+        assert lazy.backing == "lazy"
+        assert lazy.blocks_read >= 1
+        # Repeated reads reuse decoded blocks.
+        blocks = lazy.blocks_read
+        np.testing.assert_array_equal(lazy._read_rows(idx), ds.X[idx])
+        assert lazy.blocks_read == blocks
+        # Z rows are paged too.
+        zrows = lazy._read_rows(idx, True)
+        np.testing.assert_array_equal(zrows, ds.Z[idx])
+        assert lazy.loaded is False
+
+    def test_lazy_batches_stream(self, tmp_path):
+        ds, path = self._saved(tmp_path)
+        lazy = SAMDataset.load(path, lazy=True)
+        eager = SAMDataset.load(path)
+        got = list(lazy.batches(split="train", shuffle=False, batch_size=2))
+        want = list(eager.batches(split="train", shuffle=False, batch_size=2))
+        assert len(got) == len(want) == 3
+        for (gx, gsp), (wx, wsp) in zip(got, want):
+            np.testing.assert_array_equal(gx, wx)
+            assert gx.dtype == np.float32
+            np.testing.assert_array_equal(gsp, wsp)
+        # Streaming never materializes X/Z.
+        assert lazy.loaded is False
+        assert lazy.backing == "lazy"
+
+    def test_lazy_batches_use_z_stream(self, tmp_path):
+        ds, path = self._saved(tmp_path)
+        lazy = SAMDataset.load(path, lazy=True)
+        batches = list(lazy.batches(shuffle=False, batch_size=3, use_z=True))
+        np.testing.assert_array_equal(batches[0][0], ds.Z[:3])
+        np.testing.assert_array_equal(batches[1][0], ds.Z[3:])
+        assert lazy.loaded is False
+
+    def test_mmap_alias_warns(self, tmp_path):
+        ds, path = self._saved(tmp_path)
+        with pytest.warns(DeprecationWarning, match="mmap= is deprecated"):
+            lazy = SAMDataset.load(path, mmap=True)
+        assert lazy.backing == "lazy"
+        assert lazy.loaded is False
+        with pytest.warns(DeprecationWarning, match="mmap= is deprecated"):
+            import samcore
+
+            lazy2 = samcore.io.read_h5samd(path, mmap=True)
+        assert lazy2.backing == "lazy"
 
     def test_materialize_explicit(self, tmp_path):
         ds, path = self._saved(tmp_path)
-        lazy = SAMDataset.load(path, mmap=True)
+        lazy = SAMDataset.load(path, lazy=True)
         lazy.materialize()
         assert lazy.loaded is True
         np.testing.assert_array_equal(lazy.X, ds.X)
 
     def test_lazy_copy_and_save(self, tmp_path):
         ds, path = self._saved(tmp_path)
-        lazy = SAMDataset.load(path, mmap=True)
+        lazy = SAMDataset.load(path, lazy=True)
         deep = lazy.copy()
         assert lazy.loaded is True  # copy materializes the source
         assert deep.loaded is True
         np.testing.assert_array_equal(deep.X, ds.X)
 
-        lazy2 = SAMDataset.load(path, mmap=True)
+        lazy2 = SAMDataset.load(path, lazy=True)
         out = str(tmp_path / "lazy_rt.h5samd")
         lazy2.save(out)
         assert lazy2.loaded is True
         rt = SAMDataset.load(out)
         np.testing.assert_array_equal(rt.X, ds.X)
 
-    def test_io_read_h5samd_mmap(self, tmp_path):
+    def test_io_read_h5samd_lazy(self, tmp_path):
         import samcore
 
         ds, path = self._saved(tmp_path)
-        lazy = samcore.io.read_h5samd(path, mmap=True)
+        lazy = samcore.io.read_h5samd(path, lazy=True)
         assert lazy.loaded is False
         np.testing.assert_array_equal(lazy.X, ds.X)
         assert lazy.loaded is True
@@ -1629,3 +1686,4 @@ class TestLazyLoad:
         ds, path = self._saved(tmp_path)
         eager = SAMDataset.load(path)
         assert eager.loaded is True
+        assert eager.backing == "eager"

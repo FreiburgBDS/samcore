@@ -87,15 +87,11 @@ class TorchDataset:
                  with_spatial: bool = True) -> None:
         if split not in ("train", "test"):
             raise ValueError("split must be 'train' or 'test'.")
-        if use_z and dataset.Z is None:
+        if use_z and dataset.num_features is None:
             raise RuntimeError(
                 "Z has not been built yet. Call transform() first.")
         if use_z is None:
-            use_z = dataset.Z is not None
-        data = dataset.Z if use_z else dataset.X
-        if data is None:
-            raise RuntimeError(
-                f"{'Z' if use_z else 'X'} is not available in the dataset.")
+            use_z = dataset.num_features is not None
         self.dataset = dataset
         self.split = split
         self.use_z = use_z
@@ -103,7 +99,17 @@ class TorchDataset:
         self._indices = np.asarray(
             dataset.train_indices if split == "train"
             else dataset.test_indices)
-        self._data = data
+        # Materialized datasets are indexed directly; lazy datasets decode
+        # only the requested rows (see __getitem__).
+        self._materialized = dataset.loaded
+        self._data: Optional[np.ndarray] = None
+        if self._materialized:
+            data = dataset.Z if use_z else dataset.X
+            if data is None:
+                raise RuntimeError(
+                    f"{'Z' if use_z else 'X'} is not available in the "
+                    "dataset.")
+            self._data = data
         if dataset.unsupervised:
             self._labels: Optional[np.ndarray] = None
         else:
@@ -119,7 +125,13 @@ class TorchDataset:
         """Return ``(x, y, meta)`` / ``(x, meta)`` / ``(x, y)`` / ``(x,)``."""
         torch = _torch()
         row = int(self._indices[index])
-        x = torch.from_numpy(np.ascontiguousarray(self._data[row]))
+        if self._data is not None:
+            x = torch.from_numpy(np.ascontiguousarray(self._data[row]))
+        else:
+            # Lazy dataset: decode only this row from disk.
+            block = self.dataset._read_rows(  # type: ignore[attr-defined]
+                np.asarray([row], dtype=np.int64), self.use_z)
+            x = torch.from_numpy(np.ascontiguousarray(block[0]))
         meta: Optional[Dict[str, Any]] = None
         if self._spatial is not None:
             meta = {

@@ -544,56 +544,110 @@ class TestSAMHeader:
             h.set_extra("bad", object())
 
 
-# ── memmap (lazy loading) ───────────────────────────────────────────────────
+# ── lazy (paged) loading ────────────────────────────────────────────────────
 
 
-class TestMemmap:
+class TestLazyLoading:
     @needs_data
-    def test_mmap_lazy(self):
-        handler = SAMScan(H5_PATH, mmap=True)
+    def test_lazy_metadata_without_data(self):
+        handler = SAMScan(H5_PATH, lazy=True)
         assert handler.loaded is False
+        assert handler.materialized is False
+        assert handler.backing == "lazy"
+        assert handler.num_scans() > 0
+        assert handler.scanlen > 0
+        assert handler.blocks_read == 0
         assert handler.data.shape[0] > 0  # accessing data materializes it
         assert handler.loaded is True
+        assert handler.materialized is True
+        assert handler.backing == "eager"
 
     @needs_data
-    def test_mmap_slicing_works(self):
-        handler = SAMScan(H5_PATH, mmap=True)
+    def test_lazy_row_access_does_not_materialize(self):
+        handler = SAMScan(H5_PATH, lazy=True)
+        eager = SAMScan(H5_PATH)
+        np.testing.assert_array_equal(handler[3], eager[3])
+        assert handler.loaded is False
+        assert handler.backing == "lazy"
+        assert handler.blocks_read >= 1
+        # Repeated access reuses the decoded block.
+        blocks = handler.blocks_read
+        np.testing.assert_array_equal(handler[3], eager[3])
+        assert handler.blocks_read == blocks
+
+    @needs_data
+    def test_lazy_slicing_works(self):
+        handler = SAMScan(H5_PATH, lazy=True)
         eager = SAMScan(H5_PATH)
         np.testing.assert_array_equal(handler[0], eager[0])
         np.testing.assert_array_equal(handler[:10], eager[:10])
-        assert handler.loaded is True
+        np.testing.assert_array_equal(handler[0:10:2], eager[0:10:2])
+        np.testing.assert_array_equal(handler[5:2], eager[5:2])  # empty
+        assert handler.loaded is False
+        assert handler.backing == "lazy"
 
     @needs_data
-    def test_mmap_copy_is_deep(self):
-        handler = SAMScan(H5_PATH, mmap=True)
+    def test_lazy_read_rows_matches_eager(self):
+        handler = SAMScan(H5_PATH, lazy=True)
+        eager = SAMScan(H5_PATH)
+        rows = handler.read_rows(1, 5)
+        np.testing.assert_array_equal(rows, eager.data[1:6])
+        assert handler.loaded is False
+        rows[0, 0] = 123  # owned copy, no aliasing
+        assert eager.data[1, 0] != 123
+
+    @needs_data
+    def test_lazy_image_reductions_stream(self):
+        handler = SAMScan(H5_PATH, lazy=True)
+        eager = SAMScan(H5_PATH)
+        np.testing.assert_array_equal(handler.image("max"), eager.image("max"))
+        np.testing.assert_array_equal(handler.image("absmax"),
+                                      eager.image("absmax"))
+        np.testing.assert_allclose(handler.image("power"),
+                                   eager.image("power"))
+        assert handler.loaded is False
+
+    @needs_data
+    def test_mmap_alias_warns(self):
+        with pytest.warns(DeprecationWarning, match="mmap= is deprecated"):
+            handler = SAMScan(H5_PATH, mmap=True)
+        assert handler.backing == "lazy"
+        with pytest.warns(DeprecationWarning, match="mmap= is deprecated"):
+            from_file = SAMScan.from_file(H5_PATH, mmap=True)
+        assert from_file.backing == "lazy"
+
+    @needs_data
+    def test_lazy_copy_is_deep(self):
+        handler = SAMScan(H5_PATH, lazy=True)
         c = handler.copy()
         assert c.loaded is True  # copy materializes the data
+        assert handler.loaded is True
         np.testing.assert_array_equal(c.data, handler.data)
 
     @needs_data
-    def test_mmap_timescale(self):
-        handler = SAMScan(H5_PATH, mmap=True)
+    def test_lazy_timescale(self):
+        handler = SAMScan(H5_PATH, lazy=True)
         assert isinstance(handler.timescale, np.ndarray)
         assert len(handler.timescale) == handler.scanlen
         assert handler.samplespacing > 0
 
     @needs_data
-    def test_mmap_zgate_not_in_place(self):
-        handler = SAMScan(H5_PATH, mmap=True)
+    def test_lazy_zgate_not_in_place(self):
+        handler = SAMScan(H5_PATH, lazy=True)
         result = handler.zgate(threshold=0.2, length=500, in_place=False)
         assert result is not handler
         assert isinstance(result.data, np.ndarray)
 
     @needs_data
-    def test_mmap_rectangle_select_not_in_place(self):
-        handler = SAMScan(H5_PATH, mmap=True)
+    def test_lazy_rectangle_select_not_in_place(self):
+        handler = SAMScan(H5_PATH, lazy=True)
         result = handler.rectangle_select(0, 10, 0, 10, in_place=False)
         assert result is not handler
         assert isinstance(result.data, np.ndarray)
 
     @needs_data
-    def test_mmap_time_range_select_not_in_place(self):
-        handler = SAMScan(H5_PATH, mmap=True)
+    def test_lazy_time_range_select_not_in_place(self):
+        handler = SAMScan(H5_PATH, lazy=True)
         result = handler.time_range_select(
             handler.header.tzero,
             handler.header.tzero + handler.samplespacing * 500,

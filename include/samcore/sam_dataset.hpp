@@ -59,7 +59,7 @@ public:
     sam_dataset& operator=(sam_dataset&&) noexcept;
 
     // Deep copy of the dataset (X, labels, provenance, Z/V, splits).
-    // A mmap-mode dataset is materialized first.
+    // A lazy-mode dataset is materialized first.
     [[nodiscard]] sam_dataset copy() const;
 
     // Build from one or more scan handlers.  Signals are converted to
@@ -72,27 +72,40 @@ public:
     // IO
 
     // Save as .h5samd; throws std::invalid_argument unless the path ends
-    // with .h5samd.  A mmap-mode dataset is materialized first.
+    // with .h5samd.  A lazy-mode dataset is materialized first.
     void save(const std::filesystem::path& path) const;
 
-    // Load a .h5samd file.  With mmap = true the X/Z/V datasets stay on
-    // disk (the file handle is kept open) and are read on first data
-    // access; labels, cube shapes, resolutions and scan lengths are always
-    // loaded eagerly.
+    // Load a .h5samd file.  With lazy = true the X/Z/V datasets stay on
+    // disk (the file handle is kept open) and are decoded in cached row
+    // blocks on first access; labels, cube shapes, resolutions and scan
+    // lengths are always loaded eagerly.  The data is chunked + compressed,
+    // so this is paged lazy reading, not memory mapping.
     [[nodiscard]] static sam_dataset load(const std::filesystem::path& path,
-                                          bool mmap = false);
+                                          bool lazy = false);
 
     // Whether the data has been loaded into memory (false while a
-    // mmap-mode dataset is still backed by the on-disk HDF5 file).
+    // lazy-mode dataset is still backed by the on-disk HDF5 file).
     [[nodiscard]] bool loaded() const noexcept { return lazy_ == nullptr; }
+    // Alias of loaded(); backing() is "eager" or "lazy".
+    [[nodiscard]] bool materialized() const noexcept { return loaded(); }
+    [[nodiscard]] std::string backing() const {
+        return lazy_ ? "lazy" : "eager";
+    }
 
     // Materialize X/Z/V (no-op when already loaded).  Every data accessor
     // calls this implicitly.
     void load() const { ensure_loaded(); }
 
+    // Read selected rows of X (or Z with use_z) without materializing a
+    // lazy dataset; only the blocks containing those rows are decoded.
+    [[nodiscard]] array2d<float> read_rows(
+        const std::vector<std::int64_t>& indices, bool use_z = false) const;
+    // Number of X blocks decoded from disk so far (0 when materialized).
+    [[nodiscard]] size_t blocks_read() const noexcept;
+
     // accessors
 
-    // Data accessors materialize a mmap-mode dataset on first use.
+    // Data accessors materialize a lazy-mode dataset on first use.
     [[nodiscard]] const array2d<float>& X() const;
     [[nodiscard]] array2d<float>& X();
     [[nodiscard]] const std::optional<sam_labels>& labels() const noexcept {
@@ -107,7 +120,7 @@ public:
     [[nodiscard]] bool has_v() const noexcept;
     [[nodiscard]] bool unsupervised() const noexcept { return unsupervised_; }
     [[nodiscard]] float pad_value() const noexcept { return pad_value_; }
-    // Metadata only: these never materialize a mmap-mode dataset.
+    // Metadata only: these never materialize a lazy-mode dataset.
     [[nodiscard]] size_t num_samples() const noexcept;
     [[nodiscard]] size_t num_features() const noexcept;
     [[nodiscard]] size_t maxlen() const noexcept;
@@ -176,7 +189,7 @@ public:
 private:
     void ensure_loaded() const;
 
-    // Data members are mutable: ensure_loaded() materializes a mmap-mode
+    // Data members are mutable: ensure_loaded() materializes a lazy-mode
     // dataset through const accessors (same pattern as sam_scan::data_).
     mutable array2d<float> x_;
     std::optional<sam_labels> labels_;

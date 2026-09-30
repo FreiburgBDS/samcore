@@ -34,6 +34,7 @@ using namespace samcore;
 using in_i8_2 = nb::ndarray<const std::int8_t, nb::numpy, nb::ndim<2>, nb::c_contig>;
 using in_i8_1 = nb::ndarray<const std::int8_t, nb::numpy, nb::ndim<1>, nb::c_contig>;
 using in_i32_1 = nb::ndarray<const std::int32_t, nb::numpy, nb::ndim<1>, nb::c_contig>;
+using in_i64_1 = nb::ndarray<const std::int64_t, nb::numpy, nb::ndim<1>, nb::c_contig>;
 using in_f32_2 = nb::ndarray<const float, nb::numpy, nb::ndim<2>, nb::c_contig>;
 using in_f32_1 = nb::ndarray<const float, nb::numpy, nb::ndim<1>, nb::c_contig>;
 
@@ -65,6 +66,14 @@ nb::object to_numpy(std::vector<T>&& v) {
     return nb::cast(to_ndarray(std::move(v)));
 }
 
+// Convert a freshly built non-owning ndarray into a Python object without
+// copying.  The binding must pin the owner with nb::rv_policy::reference +
+// nb::keep_alive<1, 0>: the array points into the C++ owner's memory.
+template <typename T>
+nb::object to_numpy_view(nb::ndarray<nb::numpy, T> arr) {
+    return nb::cast(arr, nb::rv_policy::reference);
+}
+
 template <typename T>
 nb::object to_numpy3(array3d<T>&& a) {
     auto* buf = new array3d<T>(std::move(a));
@@ -91,6 +100,19 @@ template <class F>
 auto without_gil(F&& f) -> decltype(f()) {
     nb::gil_scoped_release release;
     return f();
+}
+
+// Resolve the lazy flag from the new `lazy=` argument and the deprecated
+// `mmap=` alias.  samcore cannot memory-map chunked/compressed HDF5 data, so
+// `mmap=` warns and maps to lazy reading.
+inline bool lazy_flag(bool lazy, nb::object mmap) {
+    if (mmap.is_none()) return lazy;
+    nb::module_ warnings = nb::module_::import_("warnings");
+    warnings.attr("warn")(
+        "mmap= is deprecated: samcore cannot memory-map chunked/compressed "
+        "HDF5 data and reads it lazily instead. Use lazy= instead.",
+        nb::handle(PyExc_DeprecationWarning));
+    return nb::cast<bool>(mmap);
 }
 
 template <typename T>
