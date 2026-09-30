@@ -15,7 +15,8 @@ namespace samcore::utils {
 [[nodiscard]] std::vector<double> kurt(const array2d<float>& data);
 
 // Sample-spaced time index tzero + i * delta_t for i in [0, num)
-// (end-exclusive; delta_t is the sample spacing, not a span).
+// (end-exclusive; delta_t is the sample spacing, not a span).  All
+// three are in the same time unit (ns for SAM data).
 [[nodiscard]] std::vector<double> time_index(double tzero, double delta_t,
                                              size_t num);
 
@@ -25,7 +26,8 @@ namespace samcore::utils {
     std::span<const float> scan, double d = 1.0);
 
 // One-sided FFT magnitude of every signal (numpy rfft parity), float32.
-// d is the sample spacing (1/fs) for the frequency axis.  Returns
+// d is the sample spacing (1/fs) for the frequency axis; the returned
+// frequencies are in 1/d units (d in ns -> GHz).  Returns
 // {magnitude (n_signals, n_freqs), frequencies (n_freqs,)}.
 [[nodiscard]] std::pair<array2d<float>, std::vector<float>> fft_spectrum(
     const array2d<float>& data, double d = 1.0);

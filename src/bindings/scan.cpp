@@ -13,6 +13,12 @@ void bind_scan(nb::module_& m) {
                                  "``data`` is a zero-copy numpy view of the "
                                  "C++ buffer with shape "
                                  "(nlines * cols, scanlen).\n\n"
+                                 "Units: time values in ns (``time``, "
+                                 "``tof``, gates), sampling rate in MHz "
+                                 "(``samplerate``), lateral resolution in "
+                                 "µm/pixel (``header.resolution``); spectral "
+                                 "frequency bins are in Hz and STFT time "
+                                 "bins in seconds.\n\n"
                                  "Attributes\n"
                                  "----------\n"
                                  "data : ndarray (int8)\n"
@@ -386,6 +392,9 @@ void bind_scan(nb::module_& m) {
                     "  - 'max'    - maximum sample value of each scan\n"
                     "  - 'absmax' - maximum absolute sample value of each scan\n"
                     "  - 'power'  - sum of squared samples (signal energy)\n\n"
+                    "Values are uncalibrated: 'max'/'absmax' are in raw "
+                    "int8 sample units and 'power' in squared int8 sample "
+                    "units.\n\n"
                     "Parameters\n"
                     "----------\n"
                     "mode : str\n"
@@ -568,7 +577,7 @@ void bind_scan(nb::module_& m) {
                  });
              },
              nb::arg("start_time"), nb::arg("end_time"),
-             "Return a copy truncated to the given time range in nanoseconds.")
+             "Return a copy truncated to the given time range in ns.")
         .def("_time_range_select_ip",
              [](sam_scan& s, double start_time, double end_time) {
                  without_gil([&] {
@@ -577,7 +586,7 @@ void bind_scan(nb::module_& m) {
              },
              nb::arg("start_time"), nb::arg("end_time"),
              "Truncate the signals in place to the given time range in "
-                     "nanoseconds.")
+                     "ns.")
         .def("_zgate_copy",
              [](const sam_scan& s, double threshold, std::int64_t length) {
                  return without_gil([&] {
@@ -613,7 +622,8 @@ void bind_scan(nb::module_& m) {
                      "Used by ``zgate`` and cross-correlation alignment: the "
                      "values are accumulated on top of existing starts (or "
                      "set directly when none exist); -1 marks an unaligned "
-                     "scan and zero-fills its samples.")
+                     "scan and zero-fills its samples.  ``starts`` are sample "
+                     "indices and ``scanlen`` is a length in samples.")
         .def("_align_xcorr",
              [](sam_scan& s, size_t reference, std::int64_t max_shift) {
                  without_gil([&] { s.align_xcorr(reference, max_shift); });
@@ -642,7 +652,7 @@ void bind_scan(nb::module_& m) {
                      "Each A-scan is shifted so the echo picked by its "
                      "analytic-envelope peak lands at the reference scan's "
                      "peak.  The ToF gate is ``[start_ns, start_ns + "
-                     "gate_ns)`` on the time axis (both in nanoseconds); "
+                     "gate_ns)`` on the time axis (both in ns); "
                      "existing ``starts`` advance by the applied integer "
                      "shift (clamped at 0).  Scans without an envelope peak "
                      "in the gate are left unchanged.")
@@ -701,8 +711,9 @@ void bind_scan(nb::module_& m) {
              nb::sig(
                  "def _thickness(self, sound_speed_m_s: float, start: int = 0, end: int = 0, sub_sample: bool = True) -> numpy.typing.NDArray[numpy.float32]"),
              "Pulse-echo thickness image derived from :meth:`tof`.\n\n"
-                     "``thickness = tof_ns * 1e-9 * sound_speed_m_s / 2``; "
-                     "silent windows stay NaN.\n\n"
+                     "``thickness = tof_ns * 1e-9 * sound_speed_m_s / 2``, "
+                     "i.e. the result is in meters (m); silent windows stay "
+                     "NaN.\n\n"
                      "Parameters\n"
                      "----------\n"
                      "sound_speed_m_s : float\n"
@@ -737,7 +748,7 @@ void bind_scan(nb::module_& m) {
                      "Parameters\n"
                      "----------\n"
                      "gate_ns : float\n"
-                     "    Window length in nanoseconds.\n"
+                     "    Window length in ns.\n"
                      "n_gates : int, optional\n"
                      "    Maximum number of gates per scan (upper bound; "
                      "gates that do not fit are zero).\n"
@@ -786,8 +797,8 @@ void bind_scan(nb::module_& m) {
                      "Returns\n"
                      "-------\n"
                      "(freqs, time, zxx) : tuple of ndarray\n"
-                     "    Frequency bins (n_freqs,), time bins (n_frames,) "
-                     "and the complex STFT of shape "
+                     "    Frequency bins in Hz (n_freqs,), time bins in "
+                     "seconds (n_frames,) and the complex STFT of shape "
                      "(n_signals, n_freqs, n_frames).")
         .def("psd",
              [](sam_scan& s, size_t nperseg, size_t noverlap, double f_min,
@@ -849,8 +860,8 @@ void bind_scan(nb::module_& m) {
                      "Returns\n"
                      "-------\n"
                      "(freqs, time, sxx) : tuple of ndarray\n"
-                     "    Frequency bins (n_freqs,), time bins (n_frames,) "
-                     "and the power spectrogram of shape "
+                     "    Frequency bins in Hz (n_freqs,), time bins in "
+                     "seconds (n_frames,) and the power spectrogram of shape "
                      "(n_signals, n_freqs, n_frames).")
         .def("stft_peak_frequency",
              [](sam_scan& s, size_t nperseg, size_t noverlap, double f_min,

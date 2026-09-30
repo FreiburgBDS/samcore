@@ -62,12 +62,12 @@ void bind_header(nb::module_& m) {
                                    "samplerate : float\n"
                                    "    Sampling rate in MHz.\n"
                                    "tzero : int\n"
-                                   "    Time origin in nanoseconds.\n"
+                                   "    Time origin in ns.\n"
                                    "quality : bool\n"
                                    "    True for high acquisition quality, False "
                                    "for low quality.\n"
                                    "resolution : float\n"
-                                   "    Lateral resolution in um per pixel.\n"
+                                   "    Lateral resolution in µm per pixel.\n"
                                    "mode : str\n"
                                    "    Scan mode, 'echo', 'through' or an "
                                    "empty string.\n"
@@ -119,7 +119,7 @@ void bind_header(nb::module_& m) {
                      "tzero : int\n"
                      "    Time origin in ns.\n"
                      "resolution : float\n"
-                     "    Lateral resolution in um per pixel.\n"
+                     "    Lateral resolution in µm per pixel.\n"
                      "interpolated : bool, optional\n"
                      "    Whether the acquisition was interpolated.\n"
                      "quality : bool, optional\n"
@@ -151,7 +151,7 @@ void bind_header(nb::module_& m) {
         .def_rw("quality", &sam_header::quality,
                 "Quality flag of the acquisition.")
         .def_rw("resolution", &sam_header::resolution,
-                "Lateral resolution in um per pixel.")
+                "Lateral resolution in µm per pixel.")
         .def_rw("mode", &sam_header::mode,
                 "Acquisition mode.")
         .def_rw("transducer_in", &sam_header::transducer_in,

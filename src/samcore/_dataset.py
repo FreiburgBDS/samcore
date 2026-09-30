@@ -60,18 +60,20 @@ def preprocess(self: SAMDataset, strategy: str, **kwargs: object) -> SAMDataset:
     **kwargs
         Forwarded to the strategy:
 
-        - ``'lp'``: ``cutoff`` (float), ``fs`` (float)
+        - ``'lp'``: ``cutoff`` (float), ``fs`` (float); both in the same
+          frequency unit (MHz to match ``header.samplerate``)
         - ``'bp'``: ``cutoff_low`` (float), ``cutoff_high`` (float),
-          ``fs`` (float)
+          ``fs`` (float); same frequency unit
         - ``'normalize'``: ``mode`` (str, default ``'minmax'``, one of
           ``'max'``, ``'zscore'``, ``'minmax'``)
-        - ``'savgol'``: ``window_length`` (int, default 5),
+        - ``'savgol'``: ``window_length`` (int, default 5, in samples),
           ``polyorder`` (int, default 2)
-        - ``'medfilt'``: ``kernel_size`` (int, default 3)
-        - ``'gate'``: ``start`` (int, default 0), ``end`` (int, default 0)
+        - ``'medfilt'``: ``kernel_size`` (int, default 3, in samples)
+        - ``'gate'``: ``start`` (int, default 0, in samples), ``end``
+          (int, default 0, in samples)
         - ``'detrend'``: none
         - ``'envelope'``: none
-        - ``'moving_average'``: ``window`` (int, default 5)
+        - ``'moving_average'``: ``window`` (int, default 5, in samples)
 
     Returns
     -------
@@ -302,7 +304,9 @@ def batches(self: SAMDataset, split: str = "train", shuffle: bool = True,
     ------
     tuple
         ``(X, y, spatial)`` for supervised datasets;
-        ``(X, spatial)`` for unsupervised datasets.
+        ``(X, spatial)`` for unsupervised datasets.  ``spatial`` is the
+        provenance recarray: ``idx`` (cube id) plus ``x``/``y``
+        pixel-centre coordinates in mm.
     """
     if use_z is None:
         use_z = self.num_features is not None
@@ -351,7 +355,7 @@ def cube_batches(self: SAMDataset, use_z: Optional[bool] = None,
 
     Each cube is shaped for direct use with 2-D CNNs:
     ``(1, H, W, features)`` where H = nlines, W = scanspline, and features
-    is the scan length (or the Z dimension when ``use_z=True``).
+    is the scan length in samples (or the Z dimension when ``use_z=True``).
 
     Parameters
     ----------
@@ -484,7 +488,8 @@ def to_numpy(self: SAMDataset, split: str = "train",
     -------
     tuple
         ``(X, y, spatial)`` for supervised datasets;
-        ``(X, spatial)`` for unsupervised datasets.
+        ``(X, spatial)`` for unsupervised datasets.  ``spatial`` holds
+        ``idx`` (cube id) and ``x``/``y`` pixel-centre coordinates in mm.
     """
     indices = self.train_indices if split == "train" else self.test_indices
     if use_z is None:
@@ -518,7 +523,8 @@ def to_dict(self: SAMDataset, split: str = "train",
     dict
         Keys: ``data``, ``labels``, ``label_names``, ``handler_ids``,
         ``spatial`` (supervised); ``data``, ``handler_ids``, ``spatial``
-        (unsupervised).
+        (unsupervised).  ``spatial`` holds ``idx`` (cube id) and ``x``/``y``
+        pixel-centre coordinates in mm.
     """
     indices = self.train_indices if split == "train" else self.test_indices
     if use_z is None:

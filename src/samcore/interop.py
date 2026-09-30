@@ -67,8 +67,9 @@ class TorchDataset:
     Each item is ``(x, y, meta)`` for supervised datasets and ``(x, meta)``
     for unsupervised ones.  ``meta`` is a dict of Python scalars
     (``idx``, ``x``, ``y``) so torch's default collate builds a dict of
-    tensors without needing recarray support.  With ``with_spatial=False``
-    the meta dict is omitted, yielding ``(x, y)`` / ``(x,)``.
+    tensors without needing recarray support; ``x``/``y`` are pixel-centre
+    coordinates in mm.  With ``with_spatial=False`` the meta dict is
+    omitted, yielding ``(x, y)`` / ``(x,)``.
 
     Parameters
     ----------
@@ -166,7 +167,8 @@ def TorchDataLoader(dataset: SAMDataset, *, split: str = "train",
     use_z : bool or None, optional
         Use ``Z`` instead of ``X``; None auto-detects.
     with_spatial : bool, optional
-        Include the provenance dict in each batch.  Default True.
+        Include the provenance dict in each batch (``idx`` and ``x``/``y``
+        pixel-centre coordinates in mm).  Default True.
     **kwargs
         Forwarded to ``torch.utils.data.DataLoader``.
 

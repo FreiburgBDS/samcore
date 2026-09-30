@@ -117,6 +117,7 @@ public:
     [[nodiscard]] std::int64_t nlines() const noexcept { return header_.nlines; }
     [[nodiscard]] std::int64_t cols() const noexcept { return header_.scanspline; }
     [[nodiscard]] std::int64_t scanlen() const noexcept { return header_.scanlen; }
+    // Sampling rate in MHz.
     [[nodiscard]] double samplerate() const noexcept { return header_.samplerate; }
     [[nodiscard]] double downsample_factor() const noexcept { return header_.downsample_factor; }
     [[nodiscard]] std::pair<std::int64_t, std::int64_t> shape() const noexcept {
@@ -135,9 +136,10 @@ public:
 
     // time
 
-    // Time index in nanoseconds; with a scan index, uses that scan's
+    // Time index in ns; with a scan index, uses that scan's
     // start when the handler carries per-scan starts (gated data).
     [[nodiscard]] std::vector<double> time(std::optional<size_t> index = {}) const;
+    // Sample spacing in ns (1e3 / samplerate).
     [[nodiscard]] double samplespacing() const noexcept {
         return 1.0 / samplerate() * 1e3;
     }
@@ -179,7 +181,8 @@ public:
                                      std::int64_t end = 0,
                                      bool sub_sample = true) const;
 
-    // Pulse-echo thickness map from tof(): tof_ns * 1e-9 * v / 2.
+    // Pulse-echo thickness map from tof(): tof_ns * 1e-9 * v / 2.  Returns
+    // meters (sound_speed_m_s in m/s).
     [[nodiscard]] array2d<float> thickness(double sound_speed_m_s,
                                            std::int64_t start = 0,
                                            std::int64_t end = 0,
@@ -193,7 +196,7 @@ public:
     //                 (positive samples only),
     //   "none"      - start at sample 0.
     // mode: "max", "absmax" (max |value|) or "power" (sum of squares).
-    // gate_ns is the window length in nanoseconds.  Scans whose pick fails
+    // gate_ns is the window length in ns.  Scans whose pick fails
     // (silent / no crossing) keep zero values and start -1; gates that do
     // not fit within the scan are zero.
     [[nodiscard]] xgate_result xgate(double gate_ns, size_t n_gates = 50,
@@ -249,7 +252,7 @@ public:
                                               std::int64_t end_idx) const;
     void index_range_select_ip(std::int64_t start_idx, std::int64_t end_idx);
 
-    // Time range in nanoseconds; adjusts tzero and scanlen.  Per-scan starts
+    // Time range in ns; adjusts tzero and scanlen.  Per-scan starts
     // are preserved and advanced the same way as index_range_select (the
     // range is measured from the shared tzero, i.e. relative time).
     [[nodiscard]] sam_scan time_range_select(double start_time,
@@ -280,7 +283,7 @@ public:
     // Classic ToF alignment: shift every A-scan so the echo picked by its
     // analytic-envelope peak lands at the reference scan's peak.  The ToF
     // gate is [start_ns, start_ns + gate_ns) on the time axis; gate_ns is
-    // required and given in nanoseconds.  Integer sample shifts are applied
+    // required and given in ns.  Integer sample shifts are applied
     // to the data and existing `starts` advance by the applied shift
     // (clamped at 0).  Scans without an envelope peak in the gate are left
     // unchanged.  Throws when the reference scan has no peak in the gate.
@@ -298,18 +301,21 @@ public:
                                                    size_t noverlap = 128,
                                                    double f_min = 0.0,
                                                    double f_max = 0.0) const;
-    // Welch PSD (scipy.signal.welch, detrend=False).
+    // Welch PSD (scipy.signal.welch, detrend=False); f in Hz, f_min/f_max
+    // in Hz.
     [[nodiscard]] signal::psd_result psd(size_t nperseg = 256,
                                          size_t noverlap = 128,
                                          double f_min = 0.0,
                                          double f_max = 0.0) const;
-    // Per-frame power spectral density (hann window, density scaling).
+    // Per-frame power spectral density (hann window, density scaling);
+    // f in Hz, t in seconds, f_min/f_max in Hz.
     [[nodiscard]] signal::spectrogram_result power_spectrogram(
         size_t nperseg = 256, size_t noverlap = 128, double f_min = 0.0,
         double f_max = 0.0) const;
-    // Per-scan STFT magnitude peaks: the frequency of the strongest
-    // max-over-frames bin and the time of the strongest max-over-frequencies
-    // frame, reshaped to (nlines, cols).  Band-limited like compute_stft().
+    // Per-scan STFT magnitude peaks: the frequency (Hz) of the strongest
+    // max-over-frames bin and the time (seconds) of the strongest
+    // max-over-frequencies frame, reshaped to (nlines, cols).  Band-limited
+    // like compute_stft().
     [[nodiscard]] array2d<float> stft_peak_frequency(
         size_t nperseg = 256, size_t noverlap = 128, double f_min = 0.0,
         double f_max = 0.0) const;

@@ -263,7 +263,7 @@ def align_manual(self: SAMScan, starts: NDArray[np.int32],
     starts : ndarray (int32)
         Per-scan start indices, length ``nlines * cols``.
     scanlen : int
-        Window length the starts refer to.
+        Window length the starts refer to, in samples.
 
     Returns
     -------
@@ -337,18 +337,18 @@ def align_tof(self: SAMScan, gate_ns: float, reference: int = 0,
     Each A-scan is shifted so the echo picked by its analytic-envelope peak
     (see :meth:`tof`) lands at the reference scan's peak.  The ToF gate is
     ``[start_ns, start_ns + gate_ns)`` on the time axis, both in
-    nanoseconds.  Existing ``starts`` advance by the applied integer shift
+    ns.  Existing ``starts`` advance by the applied integer shift
     (clamped at 0) so absolute feature times are preserved; scans without an
     envelope peak in the gate are left unchanged.
 
     Parameters
     ----------
     gate_ns : float
-        Length of the ToF gate in nanoseconds.  Required.
+        Length of the ToF gate in ns.  Required.
     reference : int, optional
         Flat index of the reference A-scan.  Default 0.
     start_ns : float, optional
-        Gate start offset from ``tzero`` in nanoseconds.  Default 0.
+        Gate start offset from ``tzero`` in ns.  Default 0.
     in_place : bool, optional
         If True, modify this scan and return ``self``.  Default True.
 
@@ -374,11 +374,11 @@ def aligned_tof(self: SAMScan, gate_ns: float, reference: int = 0,
     Parameters
     ----------
     gate_ns : float
-        Length of the ToF gate in nanoseconds.  Required.
+        Length of the ToF gate in ns.  Required.
     reference : int, optional
         Flat index of the reference A-scan.  Default 0.
     start_ns : float, optional
-        Gate start offset from ``tzero`` in nanoseconds.  Default 0.
+        Gate start offset from ``tzero`` in ns.  Default 0.
 
     Returns
     -------
@@ -443,7 +443,7 @@ def thickness(self: SAMScan, sound_speed_m_s: float, start: int = 0,
     Returns
     -------
     ndarray (float32)
-        Thickness map of shape ``(nlines, cols)`` in metres.
+        Thickness map of shape ``(nlines, cols)`` in meters (m).
     """
     return self._thickness(  # type: ignore[attr-defined]
         float(sound_speed_m_s), int(start), int(end), bool(sub_sample))
@@ -461,7 +461,7 @@ def xgate(self: SAMScan, gate_ns: float, n_gates: int = 50,
     Parameters
     ----------
     gate_ns : float
-        Window length in nanoseconds.
+        Window length in ns.
     n_gates : int, optional
         Maximum number of gates per scan (upper bound; gates that do not
         fit within the scan are zero).
@@ -561,7 +561,7 @@ def time_range_select(self: SAMScan, start_time: float, end_time: float,
                       in_place: bool = False) -> SAMScan:
     """Select a time range from the scan.
 
-    The range is measured in nanoseconds from the shared ``tzero`` (relative
+    The range is measured in ns from the shared ``tzero`` (relative
     time).  Per-scan ``starts`` are preserved and advanced by the sliced
     sample offset so absolute times are unchanged (a uniform valid start is
     folded into ``tzero``); use :meth:`index_range_select` when you want to
@@ -570,9 +570,9 @@ def time_range_select(self: SAMScan, start_time: float, end_time: float,
     Parameters
     ----------
     start_time : float
-        Start time in nanoseconds.
+        Start time in ns.
     end_time : float
-        End time in nanoseconds.
+        End time in ns.
     in_place : bool, optional
         If True, modify this scan and return ``self``.  Default False -- a
         new scan is returned.

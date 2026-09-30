@@ -49,11 +49,26 @@ The two formats are the core of the package:
 
 **`.h5sam`: one SAM acquisition** (a single scan cube) stored as an HDF5 file:
 
-- `header` group holds acquisition metadata as attributes: `nlines`,
-  `scanspline` (scans per line), `scanlen` (samples per A-scan), `samplerate`,
-  `tzero`, `resolution`, `interpolated`, `quality`, `mode`, `transducer_in`,
-  `transducer_through`, `cellid`, `downsample_factor`, plus arbitrary extra
-  attributes, which are preserved on round-trip.
+- `header` group holds acquisition metadata as attributes (units follow the
+  package convention: **MHz** for frequencies, **µm** for lateral distances,
+  **ns** for time):
+
+  | attribute | meaning | unit |
+  | --- | --- | --- |
+  | `nlines` | number of scan lines | — |
+  | `scanspline` | scans per line | — |
+  | `scanlen` | samples per A-scan | — |
+  | `samplerate` | sampling rate | MHz |
+  | `tzero` | time of sample 0 (`time()`, `tof`, gates) | ns |
+  | `resolution` | lateral pixel size | µm |
+  | `downsample_factor` | decimation factor already applied | — |
+  | `interpolated`, `quality` | acquisition flags | — |
+  | `mode`, `transducer_in`, `transducer_through`, `cellid` | acquisition strings | — |
+
+  Arbitrary extra attributes are preserved on round-trip.  Spectral APIs
+  return frequency bins in **Hz** and STFT/spectrogram time bins in
+  **seconds** (`f_min`/`f_max` in Hz); `SAMDataset.spatial` x/y are in
+  **mm** and `thickness()` returns **meters**.
 - `data`: the raw int8 signals, shape `(nlines * scanspline, scanlen)`,
   gzip-compressed.  With `lazy=True` only the requested rows are read;
   `data` materializes the full array on first access.
@@ -69,8 +84,9 @@ for training and analysis:
 - `labels` / `label_names`: optional per-sample labels, plus an
   `unsupervised` flag.
 - `cube_shapes`, `cube_resolutions`, `scanlens`: provenance that maps every
-  sample back to its source cube and pixel coordinates in mm
-  (`SAMDataset.spatial`).
+  sample back to its source cube (shape in lines × scans, resolution in
+  µm/pixel, scan lengths in samples); `SAMDataset.spatial` turns this into
+  per-sample x/y pixel-centre coordinates in mm.
 - `Z`: an optional feature matrix, and `V` an optional low-dimensional
   embedding.
 
@@ -99,7 +115,7 @@ cscan = scan.image("absmax")
 
 # Pool one or more cubes into a padded, label-aware dataset
 dataset = samcore.SAMDataset([scan])
-dataset.preprocess("lp", cutoff=10.0, fs=2.5e3)   # low-pass filter
+dataset.preprocess("lp", cutoff=10.0, fs=2.5e3)   # cutoff/fs in MHz
 dataset.train_test_split(test_size=0.2, random_state=0)
 
 for X, y, spatial in dataset.batches(batch_size=64):
@@ -139,8 +155,8 @@ int main() {
 
     samcore::sam_dataset dataset({scan});
     samcore::preprocess_args args;
-    args.cutoff = 10.0;
-    args.fs = 2.5e3;
+    args.cutoff = 10.0;   // MHz (same unit as samplerate)
+    args.fs = 2.5e3;      // MHz
     dataset.preprocess("lp", args);
 
     dataset.save("cells.h5samd");

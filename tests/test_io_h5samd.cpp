@@ -118,7 +118,7 @@ TEST(sam_dataset, SpatialProvenance) {
     ASSERT_EQ(sp.size(), 6);
     EXPECT_EQ(sp[0].idx, 0);
     EXPECT_FLOAT_EQ(sp[0].x, 0.0f);
-    // shape (2 lines, 3 cols); res 1000 um/px = 1 mm/px
+    // shape (2 lines, 3 cols); res 1000 µm/px = 1 mm/px
     EXPECT_FLOAT_EQ(sp[2].x, 2.0f);
     EXPECT_FLOAT_EQ(sp[3].x, 0.0f); // line 1, col 0
     EXPECT_FLOAT_EQ(sp[3].y, 1.0f);

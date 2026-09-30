@@ -180,7 +180,8 @@ void bind_submodules(nb::module_& m) {
            nb::sig(
                "def time_index(tzero: float, delta_t: float, num: int) -> numpy.typing.NDArray[numpy.float64]"),
            "Time axis ``tzero + i * delta_t`` (end-exclusive) for ``num`` "
-                   "samples.\n\n"
+                   "samples.  All three values are in the same time unit "
+                   "(ns for SAM data).\n\n"
                    "Parameters\n"
                    "----------\n"
                    "tzero : float\n"
@@ -206,12 +207,13 @@ void bind_submodules(nb::module_& m) {
                    "scan : ndarray (float32)\n"
                    "    One signal.\n"
                    "d : float, optional\n"
-                   "    Sample spacing (inverse of the sampling rate).\n\n"
+                   "    Sample spacing (inverse of the sampling rate), in any "
+                   "time unit.\n\n"
                    "Returns\n"
                    "-------\n"
                    "(magnitude, freqs) : tuple of ndarray\n"
-                   "    The magnitude spectrum and its frequency bins "
-                   "(numpy rfft/rfftfreq parity).");
+                   "    The magnitude spectrum and its frequency bins in 1/d units "
+                   "(numpy rfft/rfftfreq parity); with ``d`` in ns the bins are in GHz.");
     ut.def("fft_spectrum",
            [](in_f32_2 data, double d) {
                auto [mag, freqs] = without_gil(
@@ -228,12 +230,13 @@ void bind_submodules(nb::module_& m) {
                    "data : ndarray (float32)\n"
                    "    Signals of shape (n_signals, n_samples).\n"
                    "d : float, optional\n"
-                   "    Sample spacing (inverse of the sampling rate).\n\n"
+                   "    Sample spacing (inverse of the sampling rate), in any "
+                   "time unit.\n\n"
                    "Returns\n"
                    "-------\n"
                    "(magnitude, freqs) : tuple of ndarray\n"
                    "    Magnitude of shape (n_signals, n_freqs) and the "
-                   "frequency bins (numpy rfft/rfftfreq parity).");
+                   "frequency bins in 1/d units (numpy rfft/rfftfreq parity); with ``d`` in ns the bins are in GHz.");
     ut.def("spectral_entropy",
            [](in_f32_2 psd, double base) {
                return to_numpy(without_gil(
@@ -274,7 +277,7 @@ void bind_submodules(nb::module_& m) {
                    "Parameters\n"
                    "----------\n"
                    "freqs : ndarray (float32)\n"
-                   "    Frequency bins (n_freqs,).\n"
+                   "    Frequency bins (n_freqs,) in Hz for PSDs from ``psd()``.\n"
                    "psd : ndarray (float32)\n"
                    "    PSD of shape (n_signals, n_freqs).");
     ut.def("spectral_energy_ratio",
@@ -294,11 +297,12 @@ void bind_submodules(nb::module_& m) {
                    "Parameters\n"
                    "----------\n"
                    "freqs : ndarray (float32)\n"
-                   "    Frequency bins (n_freqs,).\n"
+                   "    Frequency bins (n_freqs,) in Hz for PSDs from ``psd()``.\n"
                    "psd : ndarray (float32)\n"
                    "    PSD of shape (n_signals, n_freqs).\n"
                    "critical_freq : float\n"
-                   "    Frequency separating the two energy bands.");
+                   "    Frequency separating the two energy bands, in the same "
+                   "unit as ``freqs``.");
 
     // file I/O
 

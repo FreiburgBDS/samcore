@@ -39,7 +39,12 @@ nb::class_<sam_dataset>(m, "SAMDataset", nb::dynamic_attr(),
                                    "of ``(X, y, spatial)``.\n\n"
                                    "Call ``preprocess`` to apply filters or "
                                    "normalization, and ``transform`` to "
-                                   "build ``Z``.")
+                                   "build ``Z``.\n\n"
+                                   "Units: ``spatial`` x/y in mm, "
+                                   "``cube_resolutions`` in µm/pixel, "
+                                   "``scanlens`` in samples; preprocessing "
+                                   "``cutoff``/``fs`` share one frequency "
+                                   "unit (MHz to match the header).")
         .def(nb::init<std::vector<sam_scan>, float, std::optional<bool>>(),
              nb::arg("handlers"), nb::arg("pad_value") = 0.0f,
              nb::arg("unsupervised") = nb::none(),
@@ -183,9 +188,9 @@ nb::class_<sam_dataset>(m, "SAMDataset", nb::dynamic_attr(),
         }, "Spatial shape ``(nlines, cols)`` of each cube.")
         .def_prop_ro("cube_resolutions", [](const sam_dataset& d) {
             return d.cube_resolutions();
-        }, "Lateral resolution (um/pixel) of each cube.")
+        }, "Lateral resolution (µm/pixel) of each cube.")
         .def_prop_ro("scanlens", [](const sam_dataset& d) { return d.scanlens(); },
-                     "Original scan length of each cube.")
+                     "Original scan length of each cube in samples.")
 .def_prop_rw("train_indices",
                      [](sam_dataset& d) {
                          return to_ndarray(
@@ -248,7 +253,7 @@ nb::class_<sam_dataset>(m, "SAMDataset", nb::dynamic_attr(),
                 nb::make_tuple(i, xx, yy), nb::arg("names") = "idx,x,y");
         }, nb::sig("def spatial(self) -> numpy.recarray"),
            "Recarray with fields ``idx`` (cube id), ``x`` and ``y`` "
-                   "(position in mm) per signal.")
+                   "(pixel-centre position in mm) per signal.")
         .def_prop_ro("dataset_label_names", [](sam_dataset& d) {
             if (!d.labels().has_value()) {
                 throw std::runtime_error(
@@ -341,7 +346,12 @@ nb::class_<sam_dataset>(m, "SAMDataset", nb::dynamic_attr(),
                      "Supported strategies: 'lp', 'bp', 'normalize' (mode "
                      "max/zscore/minmax), 'savgol', 'medfilt', 'gate', "
                      "'detrend', 'envelope' or 'moving_average'.  Only the "
-                     "parameters relevant to the chosen strategy are used.")
+                     "parameters relevant to the chosen strategy are used.\n\n"
+                     "Units: ``cutoff``/``cutoff_low``/``cutoff_high`` and "
+                     "``fs`` share one frequency unit (MHz to match "
+                     "``SAMHeader.samplerate``; only their ratio is used); "
+                     "``window_length``, ``kernel_size``, ``window``, "
+                     "``start`` and ``end`` are in samples.")
         .def("get_cube_X",
              [](sam_dataset& d, std::int32_t idx) {
                  return to_numpy3(without_gil([&] { return d.get_cube_X(idx); }));

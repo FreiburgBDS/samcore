@@ -21,26 +21,28 @@ struct h5samd_lazy_state; // defined in src/io/h5_lazy.hpp
 
 // Spatial provenance of one sample: source cube index and pixel-centre
 // coordinates in mm (x = column, y = line), computed from the cube's
-// resolution.
+// resolution (µm per pixel).
 struct spatial_record {
     std::int32_t idx;
-    float x;
-    float y;
+    float x; // mm
+    float y; // mm
 };
 
-// Parameters forwarded to sam_dataset::preprocess strategies.
+// Parameters forwarded to sam_dataset::preprocess strategies.  cutoff* and
+// fs must share one frequency unit (MHz to match sam_header::samplerate;
+// only their ratio is used); the window/sample fields count samples.
 struct preprocess_args {
-    double cutoff = 0.0;
-    double cutoff_low = 0.0;
-    double cutoff_high = 0.0;
-    double fs = 0.0;
+    double cutoff = 0.0;      // frequency unit of fs
+    double cutoff_low = 0.0;  // frequency unit of fs
+    double cutoff_high = 0.0; // frequency unit of fs
+    double fs = 0.0;          // frequency unit of cutoff*
     std::string mode = "minmax";
-    size_t window_length = 5;
+    size_t window_length = 5; // samples
     size_t polyorder = 2;
-    size_t kernel_size = 3;
-    size_t start = 0;
-    size_t end = 0;
-    size_t window = 5;
+    size_t kernel_size = 3;   // samples
+    size_t start = 0;         // sample index
+    size_t end = 0;           // sample index (0 = full length)
+    size_t window = 5;        // samples
 };
 
 // Collection of SAM A-scans pooled from one or more scan cubes,
@@ -126,15 +128,17 @@ public:
     [[nodiscard]] size_t maxlen() const noexcept;
     [[nodiscard]] const std::vector<std::pair<std::int32_t, std::int32_t>>&
     cube_shapes() const noexcept { return cube_shapes_; }
+    // Lateral resolution of each cube in µm/pixel.
     [[nodiscard]] const std::vector<double>& cube_resolutions() const noexcept {
         return cube_resolutions_;
     }
+    // A-scan lengths of each cube in samples.
     [[nodiscard]] const std::vector<std::int32_t>& scanlens() const noexcept {
         return scanlens_;
     }
 
-    // Spatial provenance for every sample, computed from cube shapes and
-    // resolutions (mm).
+    // Spatial provenance for every sample, computed from the cube shapes and
+    // resolutions (µm/pixel); x/y are pixel-centre coordinates in mm.
     [[nodiscard]] std::vector<spatial_record> spatial() const;
 
     [[nodiscard]] size_t num_classes() const;
