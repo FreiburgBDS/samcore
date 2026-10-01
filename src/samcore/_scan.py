@@ -112,7 +112,7 @@ def downsampled(self: SAMScan, factor: int, mode: str = "decimate") -> SAMScan:
 def rotate(self: SAMScan, degrees: int, in_place: bool = True) -> SAMScan:
     """Rotate the SAM cube clockwise by 90, 180, or 270 degrees.
 
-    Only the *spatial* layout of scans is rotated -- the individual signals
+    Only the *spatial* layout of scans is rotated, the individual signals
     (time-domain waveforms) are untouched.  For a scan with
     ``shape == (nlines, cols)``:
 
@@ -163,7 +163,7 @@ def rotated(self: SAMScan, degrees: int) -> SAMScan:
 def mirror(self: SAMScan, orientation: str, in_place: bool = True) -> SAMScan:
     """Mirror the SAM cube along the x or y spatial axis.
 
-    Only the *spatial* layout of scans is flipped -- the individual signals
+    Only the *spatial* layout of scans is flipped, the individual signals
     (time-domain waveforms) are untouched.  The shape of the scan is
     unchanged.
 
@@ -212,18 +212,19 @@ def mirrored(self: SAMScan, orientation: str) -> SAMScan:
     return self._mirrored(orientation)  # type: ignore[attr-defined]
 
 
-def zgate(self: SAMScan, threshold: float = 0.2, length: int = 2000,
-          in_place: bool = False) -> SAMScan:
-    """Apply threshold-based signal gating to each A-scan.
+def align_zgate(self: SAMScan, threshold: float = 0.2, length: int = 2000,
+                in_place: bool = False) -> SAMScan:
+    """Align scans by their threshold crossing.
 
     For each scan, finds the first sample whose absolute value exceeds
-    ``threshold * 127`` and extracts ``length`` samples starting from that
+    ``threshold * 127`` and keeps ``length`` samples starting from that
     position.  If the threshold crossing occurs too late (after
-    ``scanlen - length``) it is clamped so the extracted window fits.
+    ``scanlen - length``) it is clamped so the kept window fits.
 
-    If the scan already has start indices (e.g. from a previous gate or ZGT
-    data), the new relative starts are accumulated on top of the existing
-    ones.
+    If the scan already has start indices (e.g. from a previous alignment or
+    ZGT data), the new relative starts are accumulated on top of the existing
+    ones.  ``scanlen`` becomes ``length`` and starts keep the absolute time
+    axis (``time(index)``).
 
     Parameters
     ----------
@@ -231,59 +232,71 @@ def zgate(self: SAMScan, threshold: float = 0.2, length: int = 2000,
         Fraction of the full int8 range (0.0-1.0).  The actual threshold
         value is ``threshold * 127``.
     length : int, optional
-        Number of samples to extract after the threshold crossing.
+        Number of samples to keep after the threshold crossing.
     in_place : bool, optional
-        If True, modify this scan and return ``self``.  Default False -- a
+        If True, modify this scan and return ``self``.  Default False: a
         new scan is returned.
 
     Returns
     -------
     SAMScan
-        A scan containing the gated signals, with ``scanlen == length`` and
-        an associated ``starts`` array.  When ``in_place`` is True this is
-        ``self``.
+        The aligned scan.  When ``in_place`` is True this is ``self``.
     """
-    if in_place:
-        self._zgate_ip(threshold, length)  # type: ignore[attr-defined]
-        return self
-    return self._zgate_copy(threshold, length)  # type: ignore[attr-defined]
+    if not in_place:
+        h = self.copy()
+        h._align_zgate(threshold, length)  # type: ignore[attr-defined]
+        return h
+    self._align_zgate(threshold, length)  # type: ignore[attr-defined]
+    return self
 
 
 def align_manual(self: SAMScan, starts: NDArray[np.int32],
-                 scanlen: int) -> SAMScan:
-    """Apply manual per-scan start indices and a window length.
+                 scanlen: int, in_place: bool = False) -> SAMScan:
+    """Align scans to manually supplied window starts.
 
-    The values are accumulated on top of existing starts (or set directly
-    when the scan has none); -1 marks an unaligned scan and zero-fills its
-    samples.  ``scanlen`` is the length of the already-extracted windows
-    (as produced by :meth:`zgate`).
+    ``starts`` are per-scan offsets relative to each scan's current window,
+    accumulated on top of existing starts (or used directly when none
+    exist).  Every scan is reduced to ``scanlen`` samples starting at its
+    accumulated origin; -1 marks an unaligned scan and zero-fills its
+    samples.  Starts keep the absolute time axis (``time(index)``).
 
     Parameters
     ----------
     starts : ndarray (int32)
-        Per-scan start indices, length ``nlines * cols``.
+        Per-scan start offsets, length ``nlines * cols``.
     scanlen : int
-        Window length the starts refer to, in samples.
+        Common output window length, in samples.
+    in_place : bool, optional
+        If True, modify this scan and return ``self``.  Default False: a
+        new scan is returned.
 
     Returns
     -------
     SAMScan
-        ``self``, modified in place.
+        The aligned scan.  When ``in_place`` is True this is ``self``.
     """
-    self._align_manual(np.asarray(starts, dtype=np.int32), int(scanlen))  # type: ignore[attr-defined]
+    arr = np.asarray(starts, dtype=np.int32)
+    if not in_place:
+        h = self.copy()
+        h._align_manual(arr, int(scanlen))  # type: ignore[attr-defined]
+        return h
+    self._align_manual(arr, int(scanlen))  # type: ignore[attr-defined]
     return self
 
 
 def align_xcorr(self: SAMScan, reference: int = 0,
                 max_shift: Optional[int] = None,
-                in_place: bool = True) -> SAMScan:
+                max_gate_loss: float = 1.0,
+                in_place: bool = False) -> SAMScan:
     """Align every A-scan to a reference by integer cross-correlation.
 
     For each scan the lag within ``max_shift`` samples that maximizes the
-    mean-subtracted cross-correlation with the reference scan is applied to
-    the sample data, so features coincide with the reference.  Existing
-    ``starts`` advance by the applied shift (clamped at 0) so absolute
-    feature times are preserved; the reference row itself is unchanged.
+    mean-subtracted cross-correlation with the reference scan is applied, so
+    features coincide with the reference.  The overlap common to all shifted
+    scans is kept: ``scanlen`` shrinks by the total lag spread and starts
+    record each scan's absolute origin, so ``time(index)`` is preserved.
+    The reference row itself has lag 0.  Every scan gets a lag, so none is
+    marked unaligned.
 
     Parameters
     ----------
@@ -292,8 +305,12 @@ def align_xcorr(self: SAMScan, reference: int = 0,
     max_shift : int or None, optional
         Maximum absolute lag in samples; None (default) means
         ``scanlen // 4``.
+    max_gate_loss : float, optional
+        Maximum fraction of ``scanlen`` the output window may lose to the lag
+        spread; a larger spread raises ``ValueError``.  Default 1.0 (no cap).
     in_place : bool, optional
-        If True, modify this scan and return ``self``.  Default True.
+        If True, modify this scan and return ``self``.  Default False: a
+        new scan is returned.
 
     Returns
     -------
@@ -301,48 +318,56 @@ def align_xcorr(self: SAMScan, reference: int = 0,
         The aligned scan.  When ``in_place`` is True this is ``self``.
     """
     shift = 0 if max_shift is None else int(max_shift)
+    args = (int(reference), shift, float(max_gate_loss))
     if not in_place:
         h = self.copy()
-        h._align_xcorr(int(reference), shift)  # type: ignore[attr-defined]
+        h._align_xcorr(*args)  # type: ignore[attr-defined]
         return h
-    self._align_xcorr(int(reference), shift)  # type: ignore[attr-defined]
+    self._align_xcorr(*args)  # type: ignore[attr-defined]
     return self
 
 
 def align_tof(self: SAMScan, gate_ns: float, reference: int = 0,
-              start_ns: float = 0.0, in_place: bool = True) -> SAMScan:
+              start_ns: float = 0.0, max_gate_loss: float = 1.0,
+              in_place: bool = False) -> SAMScan:
     """Classic time-of-flight alignment.
 
-    Each A-scan is shifted so the echo picked by its analytic-envelope peak
-    (see :meth:`tof`) lands at the reference scan's peak.  The ToF gate is
-    ``[start_ns, start_ns + gate_ns)`` on the time axis, both in
-    ns.  Existing ``starts`` advance by the applied integer shift
-    (clamped at 0) so absolute feature times are preserved; scans without an
-    envelope peak in the gate are left unchanged.
+    Each A-scan is aligned so the echo picked by its analytic-envelope peak
+    (see :meth:`tof`) lands at the reference scan's peak.  The overlap common
+    to all aligned scans is kept: ``scanlen`` shrinks by the peak spread and
+    starts record each scan's absolute origin, so ``time(index)`` is
+    preserved.  The pick gate is ``[start_ns, start_ns + gate_ns)`` on the
+    time axis, both in ns.  Only scans without an envelope peak in the gate
+    get start -1 and are zero-filled, since no valid gate can be selected for
+    them.
 
     Parameters
     ----------
     gate_ns : float
-        Length of the ToF gate in ns.  Required.
+        Length of the pick gate in ns.  Required.
     reference : int, optional
         Flat index of the reference A-scan.  Default 0.
     start_ns : float, optional
         Gate start offset from ``tzero`` in ns.  Default 0.
+    max_gate_loss : float, optional
+        Maximum fraction of ``scanlen`` the output window may lose to the peak
+        spread; a larger spread raises ``ValueError``.  Default 1.0 (no cap).
     in_place : bool, optional
-        If True, modify this scan and return ``self``.  Default True.
+        If True, modify this scan and return ``self``.  Default False: a
+        new scan is returned.
 
     Returns
     -------
     SAMScan
         The aligned scan.  When ``in_place`` is True this is ``self``.
     """
+    args = (float(gate_ns), int(reference), float(start_ns),
+            float(max_gate_loss))
     if not in_place:
         h = self.copy()
-        h._align_tof(  # type: ignore[attr-defined]
-            float(gate_ns), int(reference), float(start_ns))
+        h._align_tof(*args)  # type: ignore[attr-defined]
         return h
-    self._align_tof(  # type: ignore[attr-defined]
-        float(gate_ns), int(reference), float(start_ns))
+    self._align_tof(*args)  # type: ignore[attr-defined]
     return self
 
 
@@ -353,7 +378,7 @@ def tof(self: SAMScan, start: int = 0, end: int = 0,
     Each A-scan is converted to its analytic signal (Hilbert transform) and
     the maximum of the envelope magnitude within the gate ``[start, end)``
     is taken as the echo arrival.  This is the conventional pick for
-    pulse-echo measurements -- no amplitude threshold is involved, so the
+    pulse-echo measurements, no amplitude threshold is involved, so the
     result is independent of the int8 signal scale.  With ``sub_sample``
     the peak position is refined by a parabolic fit through the maximum and
     its neighbours.
@@ -468,7 +493,7 @@ def rectangle_select(self: SAMScan, line_start: int, line_end: int,
     col_end : int
         Ending column index (exclusive).
     in_place : bool, optional
-        If True, modify this scan and return ``self``.  Default False -- a
+        If True, modify this scan and return ``self``.  Default False: a
         new scan is returned.
 
     Returns
@@ -501,7 +526,7 @@ def index_range_select(self: SAMScan, start_idx: int, end_idx: int,
     end_idx : int
         End of the sample range (exclusive).
     in_place : bool, optional
-        If True, modify this scan and return ``self``.  Default False -- a
+        If True, modify this scan and return ``self``.  Default False: a
         new scan is returned.
 
     Returns
@@ -532,7 +557,7 @@ def time_range_select(self: SAMScan, start_time: float, end_time: float,
     end_time : float
         End time in ns.
     in_place : bool, optional
-        If True, modify this scan and return ``self``.  Default False -- a
+        If True, modify this scan and return ``self``.  Default False: a
         new scan is returned.
 
     Returns
@@ -578,7 +603,7 @@ def __array__(self: SAMScan, dtype: Any = None,
 
 # Attach the convenience API to the C++ class.  The class is bound with
 # nb::dynamic_attr(), so the patched members keep working on every instance,
-# including those returned by C++ (copy(), from_data(), zgate(), ...).
+# including those returned by C++ (copy(), from_data(), align_zgate(), ...).
 #
 # Setting __module__ to "samcore._samcore" makes nanobind's stubgen render
 # these members inside the generated class stub (with their annotations and
@@ -589,7 +614,7 @@ def __array__(self: SAMScan, dtype: Any = None,
 # alone then releases everything at interpreter shutdown on every platform.
 _PATCHED = (
     compute_stft, downsample, downsampled, rotate, rotated, mirror, mirrored,
-    zgate, align_manual, align_xcorr, align_tof,
+    align_zgate, align_manual, align_xcorr, align_tof,
     tof, thickness, xgate, index_range_select, rectangle_select,
     time_range_select, num_scans, __iter__, __hash__, __array__,
 )
@@ -602,6 +627,6 @@ for _fn in _PATCHED:
     _fn.__annotations__ = _fn.__annotations__
 
 del (_PATCHED, _fn, compute_stft, downsample, downsampled, rotate, rotated,
-     mirror, mirrored, zgate, align_manual, align_xcorr, align_tof, tof,
+     mirror, mirrored, align_zgate, align_manual, align_xcorr, align_tof, tof,
      thickness, xgate, index_range_select, rectangle_select,
      time_range_select, num_scans, __iter__, __hash__, __array__, SAMScan)

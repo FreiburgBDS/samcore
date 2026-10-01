@@ -1003,44 +1003,66 @@ void sam_scan::ensure_loaded() const {
 
 void sam_scan::align_manual(const std::vector<std::int32_t>& new_starts,
                             std::int64_t new_scanlen) {
+    ensure_loaded();
+    if (new_scanlen <= 0) {
+        throw std::invalid_argument(
+            "align_manual: scanlen must be a positive integer.");
+    }
+    if (new_scanlen > scanlen()) {
+        throw std::invalid_argument(
+            "align_manual: scanlen cannot be greater than scan length.");
+    }
+    const size_t n = data_.rows();
+    if (new_starts.size() != n) {
+        throw std::invalid_argument(
+            "align_manual: starts length must equal the number of scans.");
+    }
     const std::int64_t max_start = scanlen() - new_scanlen;
-    for (auto s : new_starts) {
-        if (s > max_start && s != -1) {
+    const bool has_starts = starts_.has_value() && starts_->size() == n;
+
+    // Absolute origin (offset from tzero) of each output window; -1 marks an
+    // unaligned scan.  `new_starts` are relative to the current window and
+    // accumulate on top of any existing per-scan origin.
+    std::vector<std::int32_t> origins(n, -1);
+    for (size_t i = 0; i < n; ++i) {
+        const std::int64_t rel = new_starts[i];
+        if (rel == -1 || (has_starts && (*starts_)[i] == -1)) {
+            continue;
+        }
+        if (rel < 0 || rel > max_start) {
             throw std::invalid_argument(
                 "Start indices must be in the range [-1, " +
                 std::to_string(max_start) + "] for scan length " +
                 std::to_string(scanlen()) + " and new scan length " +
                 std::to_string(new_scanlen) + ".");
         }
+        const std::int64_t base = has_starts ? (*starts_)[i] : 0;
+        origins[i] = static_cast<std::int32_t>(base + rel);
     }
-    std::vector<uint8_t> valid_new(new_starts.size());
-    for (size_t i = 0; i < new_starts.size(); ++i) {
-        valid_new[i] = new_starts[i] != -1 ? 1 : 0;
-    }
-    if (!starts_.has_value()) {
-        for (size_t i = 0; i < valid_new.size(); ++i) {
-            if (!valid_new[i]) {
-                std::fill(data_[i].begin(), data_[i].end(), 0);
-            }
-        }
-        starts_ = new_starts;
-    } else {
-        std::vector<uint8_t> existing_valid(starts_->size());
-        for (size_t i = 0; i < starts_->size(); ++i) {
-            existing_valid[i] = (*starts_)[i] != -1 ? 1 : 0;
-        }
-        for (size_t i = 0; i < starts_->size(); ++i) {
-            if (valid_new[i] && existing_valid[i]) {
-                (*starts_)[i] += new_starts[i];
-            } else {
-                (*starts_)[i] = -1;
-                std::fill(data_[i].begin(), data_[i].end(), 0);
-            }
+
+    // Extract the aligned windows; unaligned scans are zero-filled.
+    array2d<std::int8_t> out(n, static_cast<size_t>(new_scanlen));
+#ifdef SAMCORE_HAS_OPENMP
+#pragma omp parallel for if (n > 8)
+#endif
+    for (size_t i = 0; i < n; ++i) {
+        auto dst = out[i];
+        if (origins[i] == -1) {
+            std::fill(dst.begin(), dst.end(), std::int8_t{0});
+        } else {
+            const std::int64_t rel = new_starts[i];
+            std::copy(data_[i].begin() + rel,
+                      data_[i].begin() + rel + new_scanlen, dst.begin());
         }
     }
+
+    data_ = std::move(out);
+    starts_ = std::move(origins);
+    header_.scanlen = new_scanlen;
+    collapse_starts(header_, starts_);
 }
 
-void sam_scan::zgate_ip(double threshold, std::int64_t length) {
+void sam_scan::align_zgate(double threshold, std::int64_t length) {
     ensure_loaded();
     if (length <= 0) {
         throw std::invalid_argument("Length must be a positive integer.");
@@ -1055,42 +1077,23 @@ void sam_scan::zgate_ip(double threshold, std::int64_t length) {
     const std::int64_t max_start = scanlen() - length;
     const double thresh_val = threshold * full_scale;
     const size_t n = data_.rows();
-    const size_t len = static_cast<size_t>(length);
 
-    std::vector<std::int32_t> starts(n);
-    array2d<std::int8_t> gated(n, len);
+    std::vector<std::int32_t> starts(n, -1);
 #ifdef SAMCORE_HAS_OPENMP
 #pragma omp parallel for if (n > 8)
 #endif
     for (size_t i = 0; i < n; ++i) {
-        const auto scan = data_[i];
-        std::int64_t start = first_crossing(scan, thresh_val);
+        std::int64_t start = first_crossing(data_[i], thresh_val);
         if (start >= 0) {
             if (start > max_start) start = max_start;
             starts[i] = static_cast<std::int32_t>(start);
-            std::copy(scan.begin() + static_cast<std::ptrdiff_t>(start),
-                      scan.begin() + static_cast<std::ptrdiff_t>(start + len),
-                      gated[i].begin());
-        } else {
-            starts[i] = -1;
-            std::fill(gated[i].begin(), gated[i].end(), 0);
         }
     }
-
-    data_ = std::move(gated);
     align_manual(starts, length);
-
-    collapse_starts(header_, starts_);
-    header_.scanlen = length;
 }
 
-sam_scan sam_scan::zgate(double threshold, std::int64_t length) const {
-    sam_scan h = copy();
-    h.zgate_ip(threshold, length);
-    return h;
-}
-
-void sam_scan::align_xcorr(size_t reference, std::int64_t max_shift) {
+void sam_scan::align_xcorr(size_t reference, std::int64_t max_shift,
+                           double max_gate_loss) {
     ensure_loaded();
     const size_t n = data_.rows();
     if (reference >= n) {
@@ -1114,40 +1117,35 @@ void sam_scan::align_xcorr(size_t reference, std::int64_t max_shift) {
             signal::xcorr_lag(data_[i], ref, ms));
     }
 
-    // Shift every row by -shift samples (out[j] = in[j + shift], zero-filled
-    // outside the buffer) so features land where they are in the reference.
-    array2d<std::int8_t> shifted(n, sl);
-#ifdef SAMCORE_HAS_OPENMP
-#pragma omp parallel for if (n > 8)
-#endif
+    // Keep the overlap common to every scan: the output window is
+    // `scanlen - spread` long and each scan's origin moves by the common
+    // front crop `-min_shift`, so absolute feature times are preserved.
+    const std::int32_t min_shift =
+        *std::min_element(shifts.begin(), shifts.end());
+    const std::int32_t max_shift_v =
+        *std::max_element(shifts.begin(), shifts.end());
+    const std::int64_t spread =
+        static_cast<std::int64_t>(max_shift_v - min_shift);
+    if (max_gate_loss < 1.0 &&
+        static_cast<double>(spread) >
+            max_gate_loss * static_cast<double>(sl)) {
+        throw std::invalid_argument(
+            "align_xcorr: aligned shift spread exceeds max_gate_loss.");
+    }
+    const std::int64_t gate_len = static_cast<std::int64_t>(sl) - spread;
+    if (gate_len <= 0) {
+        throw std::invalid_argument(
+            "align_xcorr: lag spread exceeds the scan length.");
+    }
+    std::vector<std::int32_t> offsets(n);
     for (size_t i = 0; i < n; ++i) {
-        const auto src = data_[i];
-        auto dst = shifted[i];
-        const std::int64_t d = shifts[i];
-        for (size_t j = 0; j < sl; ++j) {
-            const std::int64_t k = static_cast<std::int64_t>(j) + d;
-            dst[j] = (k >= 0 && k < static_cast<std::int64_t>(sl))
-                         ? src[static_cast<size_t>(k)]
-                         : std::int8_t{0};
-        }
+        offsets[i] = static_cast<std::int32_t>(shifts[i] - min_shift);
     }
-    data_ = std::move(shifted);
-
-    // Absolute feature times are preserved by advancing the window starts by
-    // the applied shift.  -1 (unaligned) rows stay -1 and zero-filled.
-    if (starts_.has_value() && starts_->size() == n) {
-        for (size_t i = 0; i < n; ++i) {
-            if ((*starts_)[i] != -1) {
-                const std::int64_t s =
-                    static_cast<std::int64_t>((*starts_)[i]) + shifts[i];
-                (*starts_)[i] =
-                    static_cast<std::int32_t>(std::max<std::int64_t>(0, s));
-            }
-        }
-    }
+    align_manual(offsets, gate_len);
 }
 
-void sam_scan::align_tof(double gate_ns, size_t reference, double start_ns) {
+void sam_scan::align_tof(double gate_ns, size_t reference, double start_ns,
+                         double max_gate_loss) {
     ensure_loaded();
     if (!(gate_ns > 0.0)) {
         throw std::invalid_argument("align_tof: gate_ns must be positive.");
@@ -1191,6 +1189,7 @@ void sam_scan::align_tof(double gate_ns, size_t reference, double start_ns) {
             "align_tof: reference scan has no envelope peak in the gate.");
     }
 
+    // Integer shift relative to the reference; unaligned scans stay -1.
     std::vector<std::int32_t> shifts(n, 0);
     for (size_t i = 0; i < n; ++i) {
         if (valid[i]) {
@@ -1199,34 +1198,41 @@ void sam_scan::align_tof(double gate_ns, size_t reference, double start_ns) {
         }
     }
 
-    // Shift every row by -shift samples so its echo lands on the reference's.
-    array2d<std::int8_t> shifted(n, sl);
-#ifdef SAMCORE_HAS_OPENMP
-#pragma omp parallel for if (n > 8)
-#endif
+    // Common overlap of every scan that has an envelope peak; scans without
+    // one (valid[i] == false) keep start -1 and are zero-filled.
+    std::int32_t min_shift = 0;
+    std::int32_t max_shift = 0;
+    bool any = false;
     for (size_t i = 0; i < n; ++i) {
-        const auto src = data_[i];
-        auto dst = shifted[i];
-        const std::int64_t d = shifts[i];
-        for (size_t j = 0; j < sl; ++j) {
-            const std::int64_t k = static_cast<std::int64_t>(j) + d;
-            dst[j] = (k >= 0 && k < static_cast<std::int64_t>(sl))
-                         ? src[static_cast<size_t>(k)]
-                         : std::int8_t{0};
+        if (!valid[i]) continue;
+        if (!any) {
+            min_shift = max_shift = shifts[i];
+            any = true;
+        } else {
+            min_shift = std::min(min_shift, shifts[i]);
+            max_shift = std::max(max_shift, shifts[i]);
         }
     }
-    data_ = std::move(shifted);
-
-    if (starts_.has_value() && starts_->size() == n) {
-        for (size_t i = 0; i < n; ++i) {
-            if ((*starts_)[i] != -1) {
-                const std::int64_t s =
-                    static_cast<std::int64_t>((*starts_)[i]) + shifts[i];
-                (*starts_)[i] =
-                    static_cast<std::int32_t>(std::max<std::int64_t>(0, s));
-            }
+    const std::int64_t spread =
+        static_cast<std::int64_t>(max_shift - min_shift);
+    if (max_gate_loss < 1.0 &&
+        static_cast<double>(spread) >
+            max_gate_loss * static_cast<double>(sl)) {
+        throw std::invalid_argument(
+            "align_tof: peak spread exceeds max_gate_loss.");
+    }
+    const std::int64_t gate_len = static_cast<std::int64_t>(sl) - spread;
+    if (gate_len <= 0) {
+        throw std::invalid_argument(
+            "align_tof: peak spread exceeds the scan length.");
+    }
+    std::vector<std::int32_t> offsets(n, -1);
+    for (size_t i = 0; i < n; ++i) {
+        if (valid[i]) {
+            offsets[i] = static_cast<std::int32_t>(shifts[i] - min_shift);
         }
     }
+    align_manual(offsets, gate_len);
 }
 
 signal::stft_result sam_scan::compute_stft(size_t nperseg, size_t noverlap,

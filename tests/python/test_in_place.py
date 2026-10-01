@@ -24,7 +24,7 @@ def _make_handler(nlines: int = 3, cols: int = 4, scanlen: int = 120) -> SAMScan
     rng = np.random.default_rng(1234)
     n = nlines * cols
     data = rng.integers(-100, 100, size=(n, scanlen)).astype(np.int8)
-    data[:, 5] = 100  # guaranteed threshold crossing for zgate
+    data[:, 5] = 100  # guaranteed threshold crossing for align_zgate
     flat = np.arange(n)
     labels = (flat % 3).astype(np.int8)
     starts = (flat * 2).astype(np.int32)
@@ -99,8 +99,8 @@ OPS: List[Tuple[str, Op, DefaultOp, bool]] = [
      lambda h: h.downsample(2, "mean"), True),
     ("downsample_median", lambda h, ip: h.downsample(3, "median", in_place=ip),
      lambda h: h.downsample(3, "median"), True),
-    ("zgate", lambda h, ip: h.zgate(0.2, 100, in_place=ip),
-     lambda h: h.zgate(0.2, 100), False),
+    ("align_zgate", lambda h, ip: h.align_zgate(0.2, 100, in_place=ip),
+     lambda h: h.align_zgate(0.2, 100), False),
     ("rectangle_select",
      lambda h, ip: h.rectangle_select(0, 2, 1, 3, in_place=ip),
      lambda h: h.rectangle_select(0, 2, 1, 3), False),

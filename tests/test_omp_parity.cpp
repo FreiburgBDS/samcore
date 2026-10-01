@@ -52,13 +52,14 @@ TEST(omp_parity, ImagePower) {
     }
 }
 
-TEST(omp_parity, Zgate) {
+TEST(omp_parity, AlignZgate) {
     auto h = make_scan(8, 8, 400);
     // carve distinct peaks per scan
     for (size_t i = 0; i < h.data().rows(); ++i) {
         h.data()[i][(i * 17) % 300 + 30] = 100;
     }
-    auto g = h.zgate(0.5, 64);
+    auto g = h.copy();
+    g.align_zgate(0.5, 64);
     for (size_t i = 0; i < g.data().rows(); ++i) {
         EXPECT_EQ(g.data()[i][0], 100);
     }

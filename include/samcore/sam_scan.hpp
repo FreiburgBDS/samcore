@@ -33,7 +33,7 @@ struct xgate_result {
 
 // Handler for SAM scan data; supports
 // loading from .h5sam files, per-scan
-// processing (image, downsample, rotate, mirror, selects, zgate) and
+// processing (image, downsample, rotate, mirror, selects, align_zgate) and
 // spectral estimation (STFT / PSD / spectrogram).
 class sam_scan {
 public:
@@ -260,34 +260,43 @@ public:
                                              double end_time) const;
     void time_range_select_ip(double start_time, double end_time);
 
-    // Threshold-based gating of every scan; returns a scan with starts
-    // accumulated on top of existing ones.
-    [[nodiscard]] sam_scan zgate(double threshold = 0.2, std::int64_t length = 2000) const;
-    void zgate_ip(double threshold, std::int64_t length);
-
-    // Public manual alignment (also used by zgate): `new_starts` are
-    // accumulated on top of existing starts (or set directly when none
-    // exist); scans with a -1 start are zero-filled.  `new_scanlen` is the
-    // length of the already-extracted windows.
+    // Manual alignment primitive shared by align_zgate/align_xcorr/align_tof.
+    // `new_starts` are per-scan offsets relative to each scan's current
+    // window, accumulated on top of existing starts (or used directly when
+    // none exist).  Every scan is reduced to `new_scanlen` samples starting
+    // at its accumulated origin; scans with a -1 offset are zero-filled and
+    // marked -1.  A uniform valid starts vector is folded into tzero, so
+    // `time(index)` keeps the original absolute time axis.
     void align_manual(const std::vector<std::int32_t>& new_starts,
                       std::int64_t new_scanlen);
 
     // Align every A-scan to the reference scan by integer cross-correlation
-    // lag within +-max_shift samples (0 = scanlen/4).  The sample data is
-    // shifted so features coincide with the reference; `starts`, when
-    // present, advance by the applied shift (clamped at 0) so absolute
-    // feature times are preserved.  The reference row is left unchanged.
-    void align_xcorr(size_t reference = 0, std::int64_t max_shift = 0);
+    // lag within +-max_shift samples (0 = scanlen/4).  The overlap common to
+    // all shifted scans is kept: scanlen shrinks by the total lag spread and
+    // `starts` record each scan's absolute window origin so `time(index)` is
+    // preserved.  The reference row itself has lag 0.  Every scan gets a lag,
+    // so no scan is marked unaligned.  If the spread exceeds
+    // `max_gate_loss * scanlen` (a fraction in (0, 1]; 1.0 disables) the call
+    // throws instead of returning a gutted window.
+    void align_xcorr(size_t reference = 0, std::int64_t max_shift = 0,
+                     double max_gate_loss = 1.0);
 
-    // Classic ToF alignment: shift every A-scan so the echo picked by its
-    // analytic-envelope peak lands at the reference scan's peak.  The ToF
-    // gate is [start_ns, start_ns + gate_ns) on the time axis; gate_ns is
-    // required and given in ns.  Integer sample shifts are applied
-    // to the data and existing `starts` advance by the applied shift
-    // (clamped at 0).  Scans without an envelope peak in the gate are left
-    // unchanged.  Throws when the reference scan has no peak in the gate.
+    // Classic ToF alignment: align every A-scan so the echo picked by its
+    // analytic-envelope peak lands at the reference scan's peak, keeping the
+    // common overlap (see align_xcorr).  The pick gate is [start_ns,
+    // start_ns + gate_ns) on the time axis; gate_ns is required and in ns.
+    // Only scans without an envelope peak in the gate are marked -1 and
+    // zero-filled, since no valid gate can be selected for them.  Throws when
+    // the reference scan has no peak in the gate.
     void align_tof(double gate_ns, size_t reference = 0,
-                   double start_ns = 0.0);
+                   double start_ns = 0.0, double max_gate_loss = 1.0);
+
+    // Threshold-based alignment (formerly zgate): per scan, find the first
+    // sample whose magnitude reaches `threshold * full_scale` and keep
+    // `length` samples from there (clamped to fit).  Starts accumulate on
+    // top of existing ones; scans without a crossing are marked -1 and
+    // zero-filled.
+    void align_zgate(double threshold = 0.2, std::int64_t length = 2000);
 
     // spectral
 

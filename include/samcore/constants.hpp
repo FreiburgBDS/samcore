@@ -5,7 +5,7 @@
 namespace samcore {
 
 // Full-scale magnitude of the int8 SAM samples: |x| <= full_scale (127).
-// Used by threshold-relative APIs such as zgate().
+// Used by threshold-relative APIs such as align_zgate().
 inline constexpr int full_scale = 127;
 
 // Marker returned by tof() and thickness() for gates without an envelope

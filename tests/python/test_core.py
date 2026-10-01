@@ -1,6 +1,6 @@
 """
 Covers SAMScan core behaviour: integrity across loads, time index, images,
-indexing, downsample, zgate, spatial/temporal selection, handler_from_data,
+indexing, downsample, align_zgate, spatial/temporal selection, handler_from_data,
 labels, copy semantics and header round trips.
 """
 
@@ -178,15 +178,15 @@ def test_downsample_not_in_place(h5):
     np.testing.assert_array_equal(result.data, h5.data[:, ::2])
 
 
-# ── zgate ───────────────────────────────────────────────────────────────────
+# ── align_zgate ─────────────────────────────────────────────────────────────
 
 @needs_data
-def test_zgate(h5):
-    # The sample testdata carries per-scan starts, which zgate offsets
+def test_align_zgate(h5):
+    # The sample testdata carries per-scan starts, which align_zgate offsets
     # against.  Clear them so this test isolates the raw crossing detection.
     h = h5.copy()
     h.starts = None
-    zg = h.zgate(threshold=0.2, length=500)
+    zg = h.align_zgate(threshold=0.2, length=500)
     assert zg.data.shape[0] == h.data.shape[0]
     assert zg.data.shape[1] == 500
     assert zg.scanlen == 500
@@ -214,24 +214,24 @@ def test_zgate(h5):
             np.testing.assert_array_equal(zg.data[i], np.zeros(500, dtype=np.int8))
 
 
-def test_zgate_synthetic():
+def test_align_zgate_synthetic():
     data = np.zeros((5, 1000), dtype=np.int8)
     data[:, 100] = 100
     hdr = SAMHeader(1, 5, 1000, 1000.0, 0, 1.0)
     h = SAMScan.handler_from_data(data, hdr)
 
-    zg = h.zgate(threshold=0.2, length=300)
+    zg = h.align_zgate(threshold=0.2, length=300)
     assert zg.scanlen == 300
     assert zg.starts is None  # all equal, tzero adjusted
     np.testing.assert_array_equal(zg.data[:, 0], [100] * 5)
 
 
-def test_zgate_no_crossing():
+def test_align_zgate_no_crossing():
     data = np.zeros((3, 500), dtype=np.int8)
     hdr = SAMHeader(1, 3, 500, 1000.0, 0, 1.0)
     h = SAMScan.handler_from_data(data, hdr)
 
-    zg = h.zgate(threshold=0.9, length=200)
+    zg = h.align_zgate(threshold=0.9, length=200)
     assert zg.scanlen == 200
     assert zg.starts is not None
     np.testing.assert_array_equal(zg.starts, [-1, -1, -1])
@@ -239,15 +239,15 @@ def test_zgate_no_crossing():
 
 
 @needs_data
-def test_zgate_length_too_large(h5):
+def test_align_zgate_length_too_large(h5):
     with pytest.raises(ValueError, match="cannot be greater than scan length"):
-        h5.zgate(threshold=0.2, length=99999)
+        h5.align_zgate(threshold=0.2, length=99999)
 
 
 @needs_data
-def test_zgate_already_gated(h5):
-    zg = h5.zgate(threshold=0.2, length=500)
-    zg2 = zg.zgate(threshold=0.2, length=200, in_place=True)
+def test_align_zgate_already_gated(h5):
+    zg = h5.align_zgate(threshold=0.2, length=500)
+    zg2 = zg.align_zgate(threshold=0.2, length=200, in_place=True)
     assert zg2 is zg
     assert zg.scanlen == 200
     assert zg.starts is not None
@@ -255,19 +255,19 @@ def test_zgate_already_gated(h5):
 
 
 @needs_data
-def test_zgate_double_gate_new_handler(h5):
-    zg = h5.zgate(threshold=0.2, length=500)
-    zg2 = zg.zgate(threshold=0.2, length=200)
+def test_align_zgate_double_gate_new_handler(h5):
+    zg = h5.align_zgate(threshold=0.2, length=500)
+    zg2 = zg.align_zgate(threshold=0.2, length=200)
     assert zg2 is not zg
     assert zg2.scanlen == 200
     assert zg2.starts is not None
 
 
 @needs_data
-def test_zgate_in_place(h5):
+def test_align_zgate_in_place(h5):
     handler = h5.copy()
     n_signals = handler.data.shape[0]
-    result = handler.zgate(threshold=0.2, length=500, in_place=True)
+    result = handler.align_zgate(threshold=0.2, length=500, in_place=True)
     assert result is handler
     assert handler.scanlen == 500
     assert handler.data.shape == (n_signals, 500)
@@ -639,9 +639,9 @@ class TestLazyLoading:
         assert handler.samplespacing > 0
 
     @needs_data
-    def test_lazy_zgate_not_in_place(self):
+    def test_lazy_align_zgate_not_in_place(self):
         handler = SAMScan(H5_PATH, lazy=True)
-        result = handler.zgate(threshold=0.2, length=500, in_place=False)
+        result = handler.align_zgate(threshold=0.2, length=500, in_place=False)
         assert result is not handler
         assert isinstance(result.data, np.ndarray)
 
