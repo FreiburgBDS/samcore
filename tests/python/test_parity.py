@@ -203,18 +203,18 @@ def test_index_range_select_preserves_alignment():
 
 
 @needs_data
-def test_zgate():
+def test_align_zgate():
     h = SAMScan(H5)
-    g = h.zgate(0.5, 100)
+    g = h.align_zgate(0.5, 100)
     assert g.scanlen == 100
     assert g.starts is not None
     assert g.starts.dtype == np.int32
     with pytest.raises(ValueError):
-        h.zgate(0.5, 0)
+        h.align_zgate(0.5, 0)
     with pytest.raises(ValueError):
-        h.zgate(-0.1, 100)
+        h.align_zgate(-0.1, 100)
     with pytest.raises(ValueError):
-        h.zgate(0.5, h.scanlen + 1)
+        h.align_zgate(0.5, h.scanlen + 1)
 
 
 @needs_data

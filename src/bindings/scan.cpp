@@ -587,27 +587,18 @@ void bind_scan(nb::module_& m) {
              nb::arg("start_time"), nb::arg("end_time"),
              "Truncate the signals in place to the given time range in "
                      "ns.")
-        .def("_zgate_copy",
-             [](const sam_scan& s, double threshold, std::int64_t length) {
-                 return without_gil([&] {
-                     return s.zgate(threshold, length);
-                 });
+        .def("_align_zgate",
+             [](sam_scan& s, double threshold, std::int64_t length) {
+                 without_gil([&] { s.align_zgate(threshold, length); });
              },
              nb::arg("threshold") = 0.2, nb::arg("length") = 2000,
-             "Apply threshold-based gating and return a copy.\n\n"
+             "Threshold-based alignment in place.\n\n"
                      "For each A-scan the first sample whose absolute value "
                      "reaches ``threshold * 127`` is found and ``length`` "
-                     "samples are extracted from there (clamped so the window "
-                     "fits).  If the scan already has start indices, the new "
-                     "relative starts are accumulated on top of them.  Scans "
-                     "without a crossing yield -1 and are zero-filled.\n\n"
-                     "Returns a gated scan whose ``scanlen`` is ``length``.")
-        .def("_zgate_ip",
-             [](sam_scan& s, double threshold, std::int64_t length) {
-                 without_gil([&] { s.zgate_ip(threshold, length); });
-             },
-             nb::arg("threshold"), nb::arg("length"),
-             "Apply threshold-based gating in place (see ``_zgate_copy``).")
+                     "samples are kept from there (clamped so the window "
+                     "fits).  Starts accumulate on top of existing ones; "
+                     "scans without a crossing get start -1 and are "
+                     "zero-filled.  ``scanlen`` becomes ``length``.")
         .def("_align_manual",
              [](sam_scan& s, in_i32_1 starts, std::int64_t scanlen) {
                  without_gil([&] {
@@ -618,38 +609,49 @@ void bind_scan(nb::module_& m) {
                  });
              },
              nb::arg("starts"), nb::arg("scanlen"),
-             "Apply manual per-scan start indices and a window length.\n\n"
-                     "Used by ``zgate`` and cross-correlation alignment: the "
-                     "values are accumulated on top of existing starts (or "
-                     "set directly when none exist); -1 marks an unaligned "
-                     "scan and zero-fills its samples.  ``starts`` are sample "
-                     "indices and ``scanlen`` is a length in samples.")
+             "Align to manual per-scan window starts in place.\n\n"
+                     "``starts`` are offsets relative to each scan's current "
+                     "window, accumulated on top of existing starts (or used "
+                     "directly when none exist); -1 marks an unaligned scan.  "
+                     "Every scan is reduced to ``scanlen`` samples from its "
+                     "accumulated origin, and starts keep the absolute time "
+                     "axis so ``time(index)`` is preserved.")
         .def("_align_xcorr",
-             [](sam_scan& s, size_t reference, std::int64_t max_shift) {
-                 without_gil([&] { s.align_xcorr(reference, max_shift); });
+             [](sam_scan& s, size_t reference, std::int64_t max_shift,
+                double max_gate_loss) {
+                 without_gil([&] {
+                     s.align_xcorr(reference, max_shift, max_gate_loss);
+                 });
              },
              nb::arg("reference") = 0, nb::arg("max_shift") = 0,
+             nb::arg("max_gate_loss") = 1.0,
              "Align every A-scan to a reference by cross-correlation in "
              "place.\n\n"
                      "Integer lags within ``max_shift`` samples (0 = "
-                     "scanlen/4) are applied to the sample data; existing "
-                     "``starts`` advance by the applied shift so absolute "
-                     "feature times are preserved.")
+                     "scanlen/4) are applied; the overlap common to all "
+                     "shifted scans is kept, so ``scanlen`` shrinks by the "
+                     "total lag spread and ``starts`` record each scan's "
+                     "absolute origin, preserving ``time(index)``.  Every scan "
+                     "gets a lag, so none is marked unaligned; a spread above "
+                     "``max_gate_loss * scanlen`` raises instead of returning "
+                     "a gutted window.")
         .def("_align_tof",
              [](sam_scan& s, double gate_ns, size_t reference,
-                double start_ns) {
-                 without_gil([&] { s.align_tof(gate_ns, reference, start_ns); });
+                double start_ns, double max_gate_loss) {
+                 without_gil([&] {
+                     s.align_tof(gate_ns, reference, start_ns, max_gate_loss);
+                 });
              },
              nb::arg("gate_ns"), nb::arg("reference") = 0,
-             nb::arg("start_ns") = 0.0,
+             nb::arg("start_ns") = 0.0, nb::arg("max_gate_loss") = 1.0,
              "Classic ToF alignment in place.\n\n"
-                     "Each A-scan is shifted so the echo picked by its "
+                     "Each A-scan is aligned so the echo picked by its "
                      "analytic-envelope peak lands at the reference scan's "
-                     "peak.  The ToF gate is ``[start_ns, start_ns + "
-                     "gate_ns)`` on the time axis (both in ns); "
-                     "existing ``starts`` advance by the applied integer "
-                     "shift (clamped at 0).  Scans without an envelope peak "
-                     "in the gate are left unchanged.")
+                     "peak, keeping the common overlap (``scanlen`` shrinks "
+                     "by the peak spread).  The pick gate is ``[start_ns, "
+                     "start_ns + gate_ns)`` on the time axis (both in ns).  "
+                     "Only scans without an envelope peak in the gate get "
+                     "start -1 and are zero-filled.")
         .def("_tof",
              [](sam_scan& s, std::int64_t start, std::int64_t end,
                 bool sub_sample) {

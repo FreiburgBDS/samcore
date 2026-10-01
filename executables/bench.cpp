@@ -54,8 +54,8 @@ int main(int argc, char** argv) {
     t = time_ms([&] { auto img = scan.image_absmax(); (void)img; });
     std::printf("image(absmax)   : %8.2f ms\n", t);
 
-    t = time_ms([&] { auto z = scan.zgate(0.5, 500); (void)z; });
-    std::printf("zgate(0.5, 500) : %8.2f ms\n", t);
+    t = time_ms([&] { auto z = scan.copy(); z.align_zgate(0.5, 500); (void)z; });
+    std::printf("align_zgate     : %8.2f ms\n", t);
 
     t = time_ms([&] { auto d = scan.downsampled(4, downsample_mode::mean); (void)d; });
     std::printf("downsample(mean): %8.2f ms\n", t);

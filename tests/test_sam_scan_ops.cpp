@@ -392,7 +392,8 @@ TEST(sam_scan, ZgateBasic) {
     data[3][195] = 90;
     auto h = sam_scan::from_data(data, header);
 
-    auto g = h.zgate(0.5, 50); // threshold 63.5
+    auto g = h.copy();
+    g.align_zgate(0.5, 50); // threshold 63.5
     EXPECT_EQ(g.scanlen(), 50);
     ASSERT_TRUE(g.starts().has_value());
     EXPECT_EQ((*g.starts())[0], 20);
@@ -408,18 +409,19 @@ TEST(sam_scan, ZgateBasic) {
     EXPECT_EQ(h.scanlen(), 200);
 }
 
-TEST(sam_scan, ZgateAllEqualFoldsTzero) {
+TEST(sam_scan, AlignZgateAllEqualFoldsTzero) {
     sam_header header(1, 1, 200, 100.0, 1000, 1.0);
     array2d<std::int8_t> data(1, 200, 0);
     data[0][40] = 100;
     auto h = sam_scan::from_data(data, header);
-    auto g = h.zgate(0.5, 50);
+    auto g = h.copy();
+    g.align_zgate(0.5, 50);
     EXPECT_FALSE(g.starts().has_value());
     // tzero += round(40 / 100 * 1e3) = 400
     EXPECT_EQ(g.header().tzero, 1400);
 }
 
-TEST(sam_scan, ZgateAccumulatesStarts) {
+TEST(sam_scan, AlignZgateAccumulatesStarts) {
     sam_header header(2, 1, 200, 100.0, 1000, 1.0);
     array2d<std::int8_t> data(2, 200, 0);
     data[0][10] = 100;
@@ -427,18 +429,19 @@ TEST(sam_scan, ZgateAccumulatesStarts) {
     std::optional<std::vector<std::int32_t>> starts =
         std::vector<std::int32_t>{5, 5};
     auto h = sam_scan::from_data(data, header, starts);
-    auto g = h.zgate(0.5, 50);
+    auto g = h.copy();
+    g.align_zgate(0.5, 50);
     ASSERT_TRUE(g.starts().has_value());
     EXPECT_EQ((*g.starts())[0], 15);
     EXPECT_EQ((*g.starts())[1], 25);
 }
 
-TEST(sam_scan, ZgateValidation) {
+TEST(sam_scan, AlignZgateValidation) {
     auto h = make_scan(1, 1, 200);
-    EXPECT_THROW((void)h.zgate(0.5, 0), std::invalid_argument);
-    EXPECT_THROW((void)h.zgate(0.5, 300), std::invalid_argument);
-    EXPECT_THROW((void)h.zgate(-0.1, 50), std::invalid_argument);
-    EXPECT_THROW((void)h.zgate(1.5, 50), std::invalid_argument);
+    EXPECT_THROW((void)h.align_zgate(0.5, 0), std::invalid_argument);
+    EXPECT_THROW((void)h.align_zgate(0.5, 300), std::invalid_argument);
+    EXPECT_THROW((void)h.align_zgate(-0.1, 50), std::invalid_argument);
+    EXPECT_THROW((void)h.align_zgate(1.5, 50), std::invalid_argument);
 }
 
 TEST(sam_scan, SpectralMethods) {
@@ -513,7 +516,7 @@ TEST(sam_scan, HeaderHashStable) {
     EXPECT_EQ(h.header_hash(), h.copy().header_hash());
 }
 
-TEST(sam_scan, ZgateMinus128NotACrossing) {
+TEST(sam_scan, AlignZgateMinus128NotACrossing) {
     // numpy parity: np.abs on int8 wraps |-128| to -128, so a -128 sample
     // must NOT be treated as a threshold crossing.
     sam_header header(2, 1, 200, 100.0, 0, 1.0);
@@ -522,7 +525,8 @@ TEST(sam_scan, ZgateMinus128NotACrossing) {
     data[0][50] = 100;       // first real crossing of scan 0
     data[1][20] = 90;        // first real crossing of scan 1
     auto h = sam_scan::from_data(data, header);
-    auto g = h.zgate(0.5, 50);
+    auto g = h.copy();
+    g.align_zgate(0.5, 50);
     ASSERT_TRUE(g.starts().has_value());
     EXPECT_EQ((*g.starts())[0], 50);
     EXPECT_EQ((*g.starts())[1], 20);
@@ -571,10 +575,12 @@ TEST(sam_scan, AlignXcorrAdvancesStarts) {
     auto h = sam_scan::from_data(data, header, starts);
     h.align_xcorr(0, 30);
     ASSERT_TRUE(h.starts().has_value());
-    // shifts are [0, +9, -4]; starts advance by the applied shift
-    EXPECT_EQ((*h.starts())[0], 100);
-    EXPECT_EQ((*h.starts())[1], 109);
-    EXPECT_EQ((*h.starts())[2], 96);
+    // shifts are [0, +9, -4]; the common front crop is +4, so each origin
+    // moves to 100 + shift + 4 and scanlen shrinks by the spread (13).
+    EXPECT_EQ((*h.starts())[0], 104);
+    EXPECT_EQ((*h.starts())[1], 113);
+    EXPECT_EQ((*h.starts())[2], 100);
+    EXPECT_EQ(h.scanlen(), 187);
 }
 
 TEST(sam_scan, AlignXcorrCopyVariantAndValidation) {
@@ -654,6 +660,37 @@ TEST(sam_scan, AlignTofValidation) {
     EXPECT_THROW(h.align_tof(-5.0), std::invalid_argument);
     EXPECT_THROW(h.align_tof(100.0, 5), std::out_of_range);
     EXPECT_THROW(h.align_tof(100.0, 0, -1.0), std::invalid_argument);
+}
+
+TEST(sam_scan, AlignTofKeepsUnusualButValidDelays) {
+    // A large but genuine echo delay is the signal, not an outlier: it is
+    // kept (never -1) and only the common gate shrinks accordingly.
+    sam_header header(1, 3, 400, 100.0, 1000, 1.0);
+    array2d<std::int8_t> data(3, 400, 0);
+    for (std::int64_t j = 0; j < 400; ++j) {
+        data[0][j] = burst_sample(j, 100, 8.0, 100.0);
+        data[1][j] = burst_sample(j, 110, 8.0, 100.0);
+        data[2][j] = burst_sample(j, 200, 8.0, 100.0);
+    }
+    auto h = sam_scan::from_data(data, header);
+    h.align_tof(2500.0, 0);
+    ASSERT_TRUE(h.starts().has_value());
+    EXPECT_EQ(h.scanlen(), 300);
+    EXPECT_EQ((*h.starts())[0], 0);
+    EXPECT_EQ((*h.starts())[1], 10);
+    EXPECT_EQ((*h.starts())[2], 100);
+}
+
+TEST(sam_scan, AlignMaxGateLossGuard) {
+    sam_header header(1, 2, 200, 100.0, 1000, 1.0);
+    array2d<std::int8_t> data(2, 200, 0);
+    for (std::int64_t j = 0; j < 200; ++j) {
+        data[0][j] = burst_sample(j, 40, 6.0, 100.0);
+        data[1][j] = burst_sample(j, 120, 6.0, 100.0);
+    }
+    auto h = sam_scan::from_data(data, header);
+    // spread 80 exceeds 0.2 * 200 = 40
+    EXPECT_THROW(h.align_tof(2000.0, 0, 0.0, 0.2), std::invalid_argument);
 }
 
 TEST(sam_scan, TofEnvelopePeak) {

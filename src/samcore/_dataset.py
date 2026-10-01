@@ -411,7 +411,7 @@ def spatial_patches(
         copy: bool = True) -> Iterator[_CubeBatch]:
     """Yield spatial patches across all cubes preserving the 2-D layout.
 
-    Each patch comes from within a single cube -- patches never cross cube
+    Each patch comes from within a single cube, patches never cross cube
     boundaries.  Cubes are read as zero-copy reshapes of their contiguous
     row block in ``X``/``Z``, so no full-cube copy is made per patch.
 

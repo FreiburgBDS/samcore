@@ -94,12 +94,12 @@ def test_align_xcorr_recovers_known_shifts():
     data[2, :-4] = tmpl[4:]     # early by 4
     h = SAMScan.handler_from_data(data, _header(1, 3, 200))
 
-    h.align_xcorr(0, 30)
-    # interior samples coincide with the reference.  The delayed scan loses
-    # its tail and the early scan loses its head: those samples lie outside
-    # the buffer and are zero-filled.
-    np.testing.assert_array_equal(h.data[1, :190], h.data[0, :190])
-    np.testing.assert_array_equal(h.data[2, 4:190], h.data[0, 4:190])
+    h = h.align_xcorr(0, 30)
+    # The overlap common to all shifted scans is kept (scanlen shrinks by the
+    # lag spread), so every row matches the reference over the retained window.
+    assert h.scanlen == 189
+    np.testing.assert_array_equal(h.data[1], h.data[0])
+    np.testing.assert_array_equal(h.data[2], h.data[0])
 
 
 def test_align_xcorr_advances_starts_and_copy_variant():
@@ -143,7 +143,7 @@ def test_align_tof_aligns_echoes_and_advances_starts():
 
     # in-place path without starts
     h2 = SAMScan.handler_from_data(data, _header(1, 2, n))
-    h2.align_tof(gate_ns=2500.0)
+    h2.align_tof(gate_ns=2500.0, in_place=True)
     np.testing.assert_array_equal(h2.data[1, 40:350], h2.data[0, 40:350])
 
 
@@ -156,7 +156,7 @@ def test_align_tof_rounds_sub_sample_offsets():
     starts = np.array([30, 30], dtype=np.int32)
     h = SAMScan.handler_from_data(data, _header(1, 2, n), starts)
 
-    h.align_tof(gate_ns=2500.0)
+    h.align_tof(gate_ns=2500.0, in_place=True)
     assert list(h.starts) == [30, 41]  # 10.6 samples -> rounded shift 11
 
 
@@ -183,9 +183,55 @@ def test_align_manual_public():
     starts = np.array([10, 20], dtype=np.int32)
     h = SAMScan.handler_from_data(data, _header(1, 2, 100), starts)
 
-    h.align_manual([3, -1], 50)
-    assert list(h.starts) == [13, -1]
-    assert np.all(h.data[1] == 0)   # -1 rows are zero-filled
-    assert np.all(h.data[0] == 5)   # valid rows keep their data
+    r = h.align_manual([3, -1], 50)
+    assert r is not h
+    np.testing.assert_array_equal(h.data, data)  # original untouched
+    assert list(r.starts) == [13, -1]
+    assert r.scanlen == 50
+    assert np.all(r.data[1] == 0)   # -1 rows are zero-filled
+    assert np.all(r.data[0] == 5)   # valid rows keep their data
     with pytest.raises(ValueError):
-        h.align_manual([100, 0], 50)
+        r.align_manual([100, 0], 50)
+
+
+def test_align_tof_keeps_unusual_but_valid_delays():
+    # A genuine, large echo delay is the signal, not an outlier: it must be
+    # kept (not marked -1); only the common gate shrinks accordingly.
+    n = 400
+    j = np.arange(n)
+    data = np.zeros((3, n), dtype=np.int8)
+    data[0] = _burst(j, 100, 8.0, 100.0)
+    data[1] = _burst(j, 110, 8.0, 100.0)
+    data[2] = _burst(j, 200, 8.0, 100.0)  # large but real delay
+    h = SAMScan.handler_from_data(data, _header(1, 3, n))
+
+    r = h.align_tof(gate_ns=2500.0)
+    assert list(r.starts) == [0, 10, 100]
+    assert r.scanlen == 300
+    np.testing.assert_array_equal(r.data[2, 40:290], r.data[0, 40:290])
+
+
+def test_align_xcorr_keeps_every_scan():
+    # Cross-correlation always yields a lag, so no scan is marked unaligned.
+    tmpl = _template(2)
+    data = np.zeros((3, 200), dtype=np.int8)
+    data[0] = tmpl
+    data[1] = tmpl
+    data[2, 20:] = tmpl[:-20]
+    h = SAMScan.handler_from_data(data, _header(1, 3, 200))
+
+    r = h.align_xcorr(0, 30)
+    assert r.scanlen == 180
+    assert list(r.starts) == [0, 0, 20]
+
+
+def test_align_max_gate_loss_guard():
+    n = 200
+    j = np.arange(n)
+    data = np.zeros((2, n), dtype=np.int8)
+    data[0] = _burst(j, 40, 6.0, 100.0)
+    data[1] = _burst(j, 120, 6.0, 100.0)
+    h = SAMScan.handler_from_data(data, _header(1, 2, n))
+
+    with pytest.raises(ValueError, match="max_gate_loss"):
+        h.align_tof(gate_ns=2000.0, max_gate_loss=0.2)
