@@ -5,7 +5,6 @@ utils operate on 2-D PSD arrays (float32 at the boundary), so only the
 """
 
 import numpy as np
-import pytest
 
 from samcore import preprocessing, utils
 
@@ -37,15 +36,17 @@ class TestKurt:
 
 
 class TestMedfilt:
-    """Edge padding is whole-sample reflection, not scipy's zero padding."""
+    """Edge padding is whole-sample reflection, not zero padding."""
 
-    def test_interior_matches_scipy(self):
-        scipy_signal = pytest.importorskip("scipy.signal")
+    def test_interior_matches_sliding_median(self):
         rng = np.random.default_rng(0)
         data = rng.standard_normal((3, 64)).astype(np.float32)
         got = preprocessing.medfilt(data, 5)
-        ref = np.stack([scipy_signal.medfilt(row, 5) for row in data])
-        np.testing.assert_allclose(got[:, 5:-5], ref[:, 5:-5], atol=1e-6)
+        # Away from the padded edges a median filter is a plain sliding median.
+        ref = np.stack([np.array([np.median(row[i - 2:i + 3])
+                                  for i in range(5, row.size - 5)])
+                        for row in data])
+        np.testing.assert_allclose(got[:, 5:-5], ref, atol=1e-6)
 
     def test_edges_use_whole_sample_reflection(self):
         data = np.array([[0.0, 3.0, 1.0, 2.0, 9.0, 1.0, 4.0, 5.0, 7.0]],
@@ -55,7 +56,7 @@ class TestMedfilt:
         ref = np.array([np.median(padded[i:i + 3])
                         for i in range(data.shape[1])])
         np.testing.assert_array_equal(got, ref)
-        # scipy.signal.medfilt would return 0.0 here (zero padding).
+        # A zero-padding implementation would return 0.0 here.
         assert got[0] == 3.0
 
 

@@ -2,10 +2,10 @@
 
 A library for Scanning Acoustic Microscopy (SAM) data processing and
 analysis with a fast C++ (libsamcore) backend.  It provides the main data
-containers -- :class:`SAMScan` (a single acquisition grid of A-scans),
+containers, :class:`SAMScan` (a single acquisition grid of A-scans),
 :class:`SAMLabels` (per-scan class labels) and :class:`SAMDataset`
 (a pooled, padded collection of scans ready for batching, splitting and
-preprocessing) -- plus signal processing primitives (``preprocessing``),
+preprocessing) plus signal processing primitives (``preprocessing``),
 spectral utilities (``utils``) and file I/O helpers (:class:`io`).
 
 Typical workflow::
