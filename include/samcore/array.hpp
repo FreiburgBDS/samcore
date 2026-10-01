@@ -199,6 +199,9 @@ public:
     }
 
     // Row along the first two axes (e.g. one signal's f x t plane).
+    [[nodiscard]] std::span<T> plane(size_t i) noexcept {
+        return std::span<T>(buf_.data() + i * d1_ * d2_, d1_ * d2_);
+    }
     [[nodiscard]] std::span<const T> plane(size_t i) const noexcept {
         return std::span<const T>(buf_.data() + i * d1_ * d2_, d1_ * d2_);
     }

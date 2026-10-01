@@ -77,7 +77,8 @@ TEST(sam_scan, TimeAxisDefault) {
     auto t = h.time();
     ASSERT_EQ(t.size(), 100);
     EXPECT_DOUBLE_EQ(t[0], 1000.0); // tzero
-    EXPECT_DOUBLE_EQ(t[99], 2000.0); // tzero + scanlen/samplerate*1e3
+    EXPECT_DOUBLE_EQ(t[1], 1010.0); // one sample spacing (10 ns)
+    EXPECT_DOUBLE_EQ(t[99], 1990.0); // tzero + (scanlen-1)*samplespacing
 }
 
 TEST(sam_scan, TimeAxisPerScanStarts) {

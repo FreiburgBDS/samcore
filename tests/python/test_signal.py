@@ -7,7 +7,7 @@ utils operate on 2-D PSD arrays (float32 at the boundary), so only the
 import numpy as np
 import pytest
 
-from samcore import utils
+from samcore import preprocessing, utils
 
 
 def _entropy_1d_ref(psd, base=2.0):
@@ -23,6 +23,40 @@ def _flatness_1d_ref(psd):
     geometric_mean = np.exp(np.mean(np.log(psd + 1e-10)))
     arithmetic_mean = np.mean(psd)
     return float(geometric_mean / arithmetic_mean)
+
+
+class TestKurt:
+    """Constant rows return the documented 0, not NaN (fast-math)."""
+
+    def test_constant_row_is_zero(self):
+        data = np.stack([np.full(16, 3.0, dtype=np.float32),
+                         np.arange(16, dtype=np.float32)])
+        k = utils.kurt(data)
+        assert k[0] == 0.0
+        assert np.isfinite(k[1])
+
+
+class TestMedfilt:
+    """Edge padding is whole-sample reflection, not scipy's zero padding."""
+
+    def test_interior_matches_scipy(self):
+        scipy_signal = pytest.importorskip("scipy.signal")
+        rng = np.random.default_rng(0)
+        data = rng.standard_normal((3, 64)).astype(np.float32)
+        got = preprocessing.medfilt(data, 5)
+        ref = np.stack([scipy_signal.medfilt(row, 5) for row in data])
+        np.testing.assert_allclose(got[:, 5:-5], ref[:, 5:-5], atol=1e-6)
+
+    def test_edges_use_whole_sample_reflection(self):
+        data = np.array([[0.0, 3.0, 1.0, 2.0, 9.0, 1.0, 4.0, 5.0, 7.0]],
+                        dtype=np.float32)
+        got = preprocessing.medfilt(data, 3)[0]
+        padded = np.pad(data[0], 1, mode="reflect")
+        ref = np.array([np.median(padded[i:i + 3])
+                        for i in range(data.shape[1])])
+        np.testing.assert_array_equal(got, ref)
+        # scipy.signal.medfilt would return 0.0 here (zero padding).
+        assert got[0] == 3.0
 
 
 class TestSpectralEntropy:
@@ -157,3 +191,13 @@ class TestSpectralEnergyRatio:
         assert out.shape == (2,)
         assert out[0] == 0.0
         assert np.isfinite(out[1])
+
+
+def test_fft_spectrum_matches_numpy():
+    rng = np.random.default_rng(0)
+    data = rng.standard_normal((4, 128)).astype(np.float32)
+    mag, freqs = utils.fft_spectrum(data, d=0.5)
+    ref = np.abs(np.fft.rfft(data.astype(np.float64), axis=1))
+    ref_f = np.fft.rfftfreq(128, d=0.5)
+    np.testing.assert_allclose(freqs, ref_f, rtol=1e-6)
+    np.testing.assert_allclose(mag, ref, rtol=1e-5, atol=1e-4)

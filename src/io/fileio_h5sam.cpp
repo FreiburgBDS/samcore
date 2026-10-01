@@ -151,6 +151,7 @@ h5sam_lazy_handle read_h5sam_lazy(const std::filesystem::path& path) {
         auto state = std::make_unique<h5sam_lazy_state>();
 
         H5::H5File file(path.string(), H5F_ACC_RDONLY);
+        detail::warn_if_newer_format(file, "read_h5sam_lazy(" + path.string() + ")");
         H5::Group header_group = file.openGroup("header");
         handle.header = read_header_group(header_group);
 
@@ -161,17 +162,16 @@ h5sam_lazy_handle read_h5sam_lazy(const std::filesystem::path& path) {
         }
         hsize_t dims[2];
         space.getSimpleExtentDims(dims);
-        state->rows = static_cast<size_t>(dims[0]);
-        state->cols = static_cast<size_t>(dims[1]);
 
-        handle.labels = read_labels_datasets(file, state->rows);
+        handle.labels = read_labels_datasets(file, static_cast<size_t>(dims[0]));
         if (file.nameExists("starts")) {
             H5::DataSet sset = file.openDataSet("starts");
             handle.starts = read_i32_1d(sset);
         }
 
-        state->file = std::move(file);
-        state->dset = std::move(dset);
+        state->reader = paged_reader<std::int8_t>(
+            std::move(file), std::move(dset), static_cast<size_t>(dims[0]),
+            static_cast<size_t>(dims[1]), H5::PredType::NATIVE_INT8);
         handle.data = std::move(state);
         return handle;
     } catch (const H5::Exception&) {
@@ -183,6 +183,7 @@ h5sam_result read_h5sam(const std::filesystem::path& path) {
     require_extension(path, {".h5sam"});
     try {
         H5::H5File file(path.string(), H5F_ACC_RDONLY);
+        detail::warn_if_newer_format(file, "read_h5sam(" + path.string() + ")");
         H5::Group header_group = file.openGroup("header");
         sam_header header = read_header_group(header_group);
 
@@ -222,6 +223,8 @@ void write_h5sam(const std::filesystem::path& path,
     require_extension(path, {".h5sam"});
     try {
         H5::H5File file(path.string(), H5F_ACC_TRUNC);
+
+        detail::write_format_version(file);
 
         H5::Group header_group = file.createGroup("header");
         write_header_group(header_group, header);

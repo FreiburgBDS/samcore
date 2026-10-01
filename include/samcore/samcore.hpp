@@ -3,6 +3,7 @@
 // libsamcore umbrella header.
 
 #include <samcore/array.hpp>
+#include <samcore/constants.hpp>
 #include <samcore/preprocessing.hpp>
 #include <samcore/sam_dataset.hpp>
 #include <samcore/sam_header.hpp>

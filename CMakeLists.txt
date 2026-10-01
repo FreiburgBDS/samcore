@@ -59,6 +59,7 @@ add_library(samcore
   src/io/fileio_h5sam.cpp
   src/io/fileio_h5samd.cpp
   src/signal/filters.cpp
+  src/signal/alignment.cpp
   src/signal/spectral.cpp
   src/preprocessing.cpp
   src/utils.cpp

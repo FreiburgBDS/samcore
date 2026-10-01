@@ -62,12 +62,12 @@ void bind_header(nb::module_& m) {
                                    "samplerate : float\n"
                                    "    Sampling rate in MHz.\n"
                                    "tzero : int\n"
-                                   "    Time origin in nanoseconds.\n"
+                                   "    Time origin in ns.\n"
                                    "quality : bool\n"
                                    "    True for high acquisition quality, False "
                                    "for low quality.\n"
                                    "resolution : float\n"
-                                   "    Lateral resolution in um per pixel.\n"
+                                   "    Lateral resolution in µm per pixel.\n"
                                    "mode : str\n"
                                    "    Scan mode, 'echo', 'through' or an "
                                    "empty string.\n"
@@ -119,7 +119,7 @@ void bind_header(nb::module_& m) {
                      "tzero : int\n"
                      "    Time origin in ns.\n"
                      "resolution : float\n"
-                     "    Lateral resolution in um per pixel.\n"
+                     "    Lateral resolution in µm per pixel.\n"
                      "interpolated : bool, optional\n"
                      "    Whether the acquisition was interpolated.\n"
                      "quality : bool, optional\n"
@@ -151,7 +151,7 @@ void bind_header(nb::module_& m) {
         .def_rw("quality", &sam_header::quality,
                 "Quality flag of the acquisition.")
         .def_rw("resolution", &sam_header::resolution,
-                "Lateral resolution in um per pixel.")
+                "Lateral resolution in µm per pixel.")
         .def_rw("mode", &sam_header::mode,
                 "Acquisition mode.")
         .def_rw("transducer_in", &sam_header::transducer_in,
@@ -166,6 +166,18 @@ void bind_header(nb::module_& m) {
                      [](sam_header& h) { return extra_to_py(h.extra); },
                      [](sam_header& h, nb::object v) { h.extra = py_to_extra(v); },
                      "Additional metadata as a dict.")
+        .def("set_extra",
+             [](sam_header& h, const std::string& key, nb::object value) {
+                 nb::dict d;
+                 d[key.c_str()] = value;
+                 extra_map m = py_to_extra(d);
+                 h.extra[key] = m.at(key);
+             },
+             nb::arg("key"), nb::arg("value"),
+             "Set one extra metadata entry with explicit type coercion.\n\n"
+                     "Scalars keep their Python type (int, float, bool, str); "
+                     "lists and dicts are stored as JSON strings and decoded "
+                     "back on read.  Unsupported types raise ValueError.")
         .def("to_json", [](const sam_header& h) { return header_to_dict(h); },
              nb::sig("def to_json(self) -> dict[str, object]"),
              "Serialize the header to a JSON-compatible dict.")
@@ -178,7 +190,8 @@ void bind_header(nb::module_& m) {
              nb::arg("start") = 0, nb::arg("end") = -1,
              nb::sig(
                  "def time(self, start: int = 0, end: int = -1) -> numpy.typing.NDArray[numpy.float64]"),
-             "Time axis in ns for samples ``start``..``end``.\n\n"
+             "Time axis in ns for samples ``start``..``end`` "
+             "(end-exclusive).\n\n"
                      "Parameters\n"
                      "----------\n"
                      "start : int, optional\n"
@@ -189,8 +202,9 @@ void bind_header(nb::module_& m) {
                      "Returns\n"
                      "-------\n"
                      "numpy.ndarray\n"
-                     "    Linearly spaced time indices in ns, "
-                     "``tzero + i / samplerate * 1e3``.")
+                     "    Sample times in ns, "
+                     "``tzero + (start + i) / samplerate * 1e3`` for "
+                     "``i < end - start``.")
         .def("copy", [](const sam_header& h) { return h; },
              "Return a copy of the header.")
         .def("__str__", [](const sam_header& h) { return header_json_str(h); },

@@ -206,3 +206,64 @@ TEST(sam_labels, SetLabelsSanitizes) {
     sam_labels l(std::vector<std::int8_t>{1}, {"not_healthy"});
     EXPECT_EQ(l.label_names()[0], "healthy");
 }
+
+TEST(sam_labels, AddLabel) {
+    sam_labels l({0, 1, 0, 2}, {"healthy", "a", "b"});
+    const auto v = l.add_label("c");
+    EXPECT_EQ(v, 3);
+    EXPECT_EQ(l.label_names().size(), 4u);
+    EXPECT_EQ(l.label_names()[3], "c");
+    EXPECT_EQ(l.name_to_value("C"), 3);
+    EXPECT_THROW(l.add_label("C"), std::invalid_argument); // case-insensitive
+    EXPECT_THROW(l.add_label("healthy"), std::invalid_argument);
+    EXPECT_THROW(l.add_label("unlabeled"), std::invalid_argument);
+    EXPECT_THROW(l.add_label(""), std::invalid_argument);
+    l.verify_integrity();
+}
+
+TEST(sam_labels, AddLabelAllUnlabeled) {
+    auto l = sam_labels::create_unlabeled(3); // names {healthy}
+    l.verify_integrity(); // regression: all-unlabeled must be valid
+    const auto v = l.add_label("defect");
+    EXPECT_EQ(v, 1);
+    EXPECT_EQ(l.label_names().size(), 2u);
+    l.verify_integrity();
+}
+
+TEST(sam_labels, AddLabelPadsRegistryGaps) {
+    sam_labels l({0, 5}, {"healthy"}); // value 5 has no name yet
+    const auto v = l.add_label("defect");
+    EXPECT_EQ(v, 6);
+    EXPECT_EQ(l.label_names().size(), 7u);
+    EXPECT_EQ(l.label_names()[5], "label5");
+    EXPECT_EQ(l.label_names()[6], "defect");
+    l.verify_integrity();
+}
+
+TEST(sam_labels, RenameLabel) {
+    sam_labels l({0, 1, 2, -1}, {"healthy", "a", "b"});
+    l.rename_label(std::int8_t{1}, "alpha");
+    EXPECT_EQ(l.label_name_val(1), "alpha");
+    l.rename_label("alpha", "beta");
+    EXPECT_EQ(l.label_name_val(1), "beta");
+    EXPECT_THROW(l.rename_label(std::int8_t{0}, "x"), std::invalid_argument);
+    EXPECT_THROW(l.rename_label(std::int8_t{-1}, "x"), std::invalid_argument);
+    EXPECT_THROW(l.rename_label(std::int8_t{1}, "b"), std::invalid_argument);
+    EXPECT_THROW(l.rename_label("missing", "x"), std::invalid_argument);
+    EXPECT_THROW(l.rename_label(std::int8_t{1}, "healthy"),
+                 std::invalid_argument);
+    l.verify_integrity();
+}
+
+TEST(sam_labels, DeleteLabel) {
+    sam_labels l({0, 1, 2, 1}, {"healthy", "a", "b"});
+    l.delete_label("a");
+    // class-1 pixels become unlabeled and the registry compacts
+    EXPECT_EQ(l.labels(), (std::vector<std::int8_t>{0, -1, 1, -1}));
+    EXPECT_EQ(l.label_names(), (std::vector<std::string>{"healthy", "b"}));
+    l.verify_integrity();
+
+    EXPECT_THROW(l.delete_label(std::int8_t{0}), std::invalid_argument);
+    EXPECT_THROW(l.delete_label(std::int8_t{-1}), std::invalid_argument);
+    EXPECT_THROW(l.delete_label("missing"), std::invalid_argument);
+}

@@ -17,23 +17,31 @@ C-scan images, spectra and ready-to-train machine-learning datasets.
 ### Features
 
 - **`.h5sam` / `.h5samd` file formats**: native HDF5-based I/O for single
-  acquisition cubes and pooled datasets, including lazy/memory-mapped reading
-  of signal data (`SAMScan(path, mmap=True)`).
+  acquisition cubes and pooled datasets, including lazy reading of signal
+  data (`SAMScan(path, lazy=True)`).
 - **C-scan imaging**: reduce every A-scan to one pixel
   (`scan.image("max" | "absmax" | "power")`) and normalize the raw int8
   signals to `[-1, 1)` (`scan.normalized_data()`).
 - **Signal processing**: built-in strategies `lp`, `bp`, `normalize`,
   `savgol`, `medfilt`, `gate`, `detrend`, `envelope` and `moving_average`.
 - **Spectral analysis**: one-sided STFT, Welch PSD and per-frame power
-  spectrograms of every A-scan.
-- **Cube manipulation**: downsample, rotate, mirror, rectangular/time-range
+  spectrograms of every A-scan, with optional `f_min`/`f_max` band limits;
+  batched `scan.spectrum()` FFT magnitudes and `stft_peak_frequency()` /
+  `stft_peak_time()` reduction images.
+- **Cube manipulation**: downsample, rotate, mirror, rectangular/sample/time
   selection and Z-gating, all with in-place and copy variants.
 - **Labels**: per-scan class labels (`SAMLabels`) with label names, masks
-  (healthy/labeled/unlabeled) and class distributions.
+  (healthy/labeled/unlabeled), class distributions and registry editing
+  (`add_label`, `rename_label`, `delete_label`).
 - **Datasets for ML**: pool one or more cubes into a padded `SAMDataset`,
   merge labels, split train/test (random, stratified, or by cube), apply
   feature transforms (`Z`) and iterate minibatches or spatial patches.
-- **Fast C++ core**: the same functionality is available from C++ as `libsamcore`, parallelized with OpenMP.
+- **Interop**: `np.asarray(scan)`, `np.asarray(dataset)` and
+  `np.asarray(labels)` work through the NumPy `__array__` protocol
+  (zero-copy when no dtype conversion is requested); the optional
+  `samcore.interop` helpers (`tensor`, `TorchDataset`, `TorchDataLoader`)
+  import PyTorch lazily and are never required by `import samcore`.
+- **Fast C++ core**: the same functionality is available from C++ as `libsamcore`, parallelized with OpenMP; long-running operations release the Python GIL.
 
 ### File formats
 
@@ -41,14 +49,29 @@ The two formats are the core of the package:
 
 **`.h5sam`: one SAM acquisition** (a single scan cube) stored as an HDF5 file:
 
-- `header` group holds acquisition metadata as attributes: `nlines`,
-  `scanspline` (scans per line), `scanlen` (samples per A-scan), `samplerate`,
-  `tzero`, `resolution`, `interpolated`, `quality`, `mode`, `transducer_in`,
-  `transducer_through`, `cellid`, `downsample_factor`, plus arbitrary extra
-  attributes, which are preserved on round-trip.
+- `header` group holds acquisition metadata as attributes (units follow the
+  package convention: **MHz** for frequencies, **µm** for lateral distances,
+  **ns** for time):
+
+  | attribute | meaning | unit |
+  | --- | --- | --- |
+  | `nlines` | number of scan lines | — |
+  | `scanspline` | scans per line | — |
+  | `scanlen` | samples per A-scan | — |
+  | `samplerate` | sampling rate | MHz |
+  | `tzero` | time of sample 0 (`time()`, `tof`, gates) | ns |
+  | `resolution` | lateral pixel size | µm |
+  | `downsample_factor` | decimation factor already applied | — |
+  | `interpolated`, `quality` | acquisition flags | — |
+  | `mode`, `transducer_in`, `transducer_through`, `cellid` | acquisition strings | — |
+
+  Arbitrary extra attributes are preserved on round-trip.  Spectral APIs
+  return frequency bins in **Hz** and STFT/spectrogram time bins in
+  **seconds** (`f_min`/`f_max` in Hz); `SAMDataset.spatial` x/y are in
+  **mm** and `thickness()` returns **meters**.
 - `data`: the raw int8 signals, shape `(nlines * scanspline, scanlen)`,
-  gzip-compressed.  With `mmap=True` the array stays in the file until first
-  access.
+  gzip-compressed.  With `lazy=True` only the requested rows are read;
+  `data` materializes the full array on first access.
 - `labels` / `label_names`: optional per-scan integer labels and their names.
 - `starts`: optional int32 per-scan start index for time-aligned or
   Z-gated data (`-1` marks an unaligned scan).
@@ -61,10 +84,13 @@ for training and analysis:
 - `labels` / `label_names`: optional per-sample labels, plus an
   `unsupervised` flag.
 - `cube_shapes`, `cube_resolutions`, `scanlens`: provenance that maps every
-  sample back to its source cube and pixel coordinates in mm
-  (`SAMDataset.spatial`).
+  sample back to its source cube (shape in lines × scans, resolution in
+  µm/pixel, scan lengths in samples); `SAMDataset.spatial` turns this into
+  per-sample x/y pixel-centre coordinates in mm.
 - `Z`: an optional feature matrix, and `V` an optional low-dimensional
   embedding.
+
+Both formats carry a `samcore_format_version` attribute on the file root.
 
 ## Installation
 
@@ -78,8 +104,8 @@ To build from source instead, see [DEVELOPMENT.md](https://github.com/FreiburgBD
 ```python
 import samcore
 
-# Load one acquisition grid; mmap=True keeps the signals on disk until first use.
-scan = samcore.SAMScan("cell.h5sam", mmap=True)
+# Load one acquisition grid
+scan = samcore.SAMScan("cell.h5sam")
 
 print(scan.header.cellid, scan.nlines, scan.cols, scan.scanlen)
 print("time axis [ns]:", scan.time()[:5])
@@ -89,7 +115,7 @@ cscan = scan.image("absmax")
 
 # Pool one or more cubes into a padded, label-aware dataset
 dataset = samcore.SAMDataset([scan])
-dataset.preprocess("lp", cutoff=10.0, fs=2.5e3)   # low-pass filter
+dataset.preprocess("lp", cutoff=10.0, fs=2.5e3)   # cutoff/fs in MHz
 dataset.train_test_split(test_size=0.2, random_state=0)
 
 for X, y, spatial in dataset.batches(batch_size=64):
@@ -129,8 +155,8 @@ int main() {
 
     samcore::sam_dataset dataset({scan});
     samcore::preprocess_args args;
-    args.cutoff = 10.0;
-    args.fs = 2.5e3;
+    args.cutoff = 10.0;   // MHz (same unit as samplerate)
+    args.fs = 2.5e3;      // MHz
     dataset.preprocess("lp", args);
 
     dataset.save("cells.h5samd");

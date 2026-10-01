@@ -81,7 +81,9 @@ def test_time_and_spacing():
     assert len(t) == h.scanlen
     assert np.isclose(h.samplespacing, 1.0 / h.samplerate * 1e3)
     assert np.isclose(t[0], h.header.tzero)
-    assert np.allclose(np.diff(t), np.diff(t)[0])
+    # end-exclusive: the last timestamp is the last sample, not the span end
+    assert np.isclose(t[-1], h.header.tzero + (h.scanlen - 1) * h.samplespacing)
+    assert np.allclose(np.diff(t), h.samplespacing)
 
 
 @needs_data
@@ -153,7 +155,51 @@ def test_selects():
     tsel = h.time_range_select(h.header.tzero + 1000.0,
                                h.header.tzero + 2000.0)
     assert tsel.scanlen < h.scanlen
-    assert tsel.starts is None
+    # per-scan alignment is preserved: valid starts advance by the slice
+    # offset, -1 rows stay unaligned, tzero is unchanged
+    start_idx = int(np.rint(1000.0 / h.samplespacing))
+    src = np.asarray(h.starts)
+    dst = np.asarray(tsel.starts)
+    assert tsel.starts is not None
+    valid = src != -1
+    np.testing.assert_array_equal(dst[valid], src[valid] + start_idx)
+    np.testing.assert_array_equal(dst[~valid], -1)
+    assert tsel.header.tzero == h.header.tzero
+
+
+def test_index_range_select_preserves_alignment():
+    rng = np.random.default_rng(0)
+    data = rng.integers(-100, 100, size=(3, 64)).astype(np.int8)
+    header = SAMHeader(scanspline=1, nlines=3, scanlen=64, samplerate=100.0,
+                       tzero=1000, resolution=1.0)
+    starts = np.array([10, 20, -1], dtype=np.int32)
+    h = SAMScan.handler_from_data(data, header, starts)
+
+    sel = h.index_range_select(5, 15)
+    assert sel.scanlen == 10
+    assert list(sel.starts) == [15, 25, -1]
+    np.testing.assert_array_equal(sel.data, data[:, 5:15])
+    for i in (0, 1):
+        np.testing.assert_allclose(sel.time(i), h.time(i)[5:15])
+
+    # in-place path
+    ip = SAMScan.handler_from_data(data, header, starts)
+    ip.index_range_select(5, 15, in_place=True)
+    np.testing.assert_array_equal(ip.data, sel.data)
+
+    # out-of-range indices are clamped
+    clamped = h.index_range_select(-5, 200)
+    np.testing.assert_array_equal(clamped.data, data)
+
+    # a uniform valid starts vector collapses into tzero
+    uniform = SAMScan.handler_from_data(
+        data, header, np.full(3, 10, dtype=np.int32))
+    collapsed = uniform.index_range_select(3, 8)
+    assert collapsed.starts is None
+    assert collapsed.header.tzero == 1000 + 13 * 10
+
+    with pytest.raises(ValueError):
+        h.index_range_select(20, 20)
 
 
 @needs_data
@@ -212,9 +258,10 @@ def test_handler_from_data_and_copy():
 
 
 @needs_data
-def test_mmap_lazy_load():
-    h = SAMScan(H5, mmap=True)
+def test_lazy_load():
+    h = SAMScan(H5, lazy=True)
     assert h.loaded is False
+    assert h.backing == "lazy"
     assert h.num_scans() == h.header.nlines * h.header.scanspline
     assert len(h.samlabels.labels) == h.num_scans()
     _ = h.data  # materialize
@@ -413,3 +460,66 @@ def test_io_functions():
     assert isinstance(labels, SAMLabels)
     assert data.shape[1] == header.scanlen
     assert data.shape[0] == header.nlines * header.scanspline
+
+
+# Format versioning (root attributes and the newer-version warn-and-load
+# path) is covered by the C++ suite for both formats
+# (io_h5sam/io_h5samd FormatVersionAttributes): the Python-side check
+# needed h5py, whose Windows wheels bundle an HDF5 major that collides
+# with the HDF5 samcore links against.
+
+
+@needs_data
+def test_spectrum_matches_numpy():
+    h = SAMScan(H5)
+    freqs, mag = h.spectrum()
+    fs = h.samplerate * 1e6
+    ref = np.abs(np.fft.rfft(h.data.astype(np.float64), axis=1))
+    ref_f = np.fft.rfftfreq(h.scanlen, d=1.0 / fs)
+    np.testing.assert_allclose(freqs, ref_f, rtol=1e-6)
+    np.testing.assert_allclose(mag, ref, rtol=1e-4, atol=1e-2)
+
+
+def test_spectral_band_and_peaks():
+    fs = 1.0e6
+    n = 2048
+    t = np.arange(n) / fs
+    data = np.stack([
+        90 * np.sin(2 * np.pi * 125000 * t) +
+        30 * np.sin(2 * np.pi * 250000 * t),
+        90 * np.sin(2 * np.pi * 250000 * t),
+    ]).astype(np.int8)
+    header = SAMHeader(scanspline=1, nlines=2, scanlen=n,
+                       samplerate=fs / 1e6, tzero=0, resolution=1.0)
+    h = SAMScan.handler_from_data(data, header)
+
+    # band-limited PSD equals a slice of the full-band result
+    f_full, psd_full = h.psd(nperseg=256, noverlap=128)
+    f_band, psd_band = h.psd(nperseg=256, noverlap=128,
+                             f_min=2.0e5, f_max=3.0e5)
+    keep = (f_full >= 2.0e5) & (f_full <= 3.0e5)
+    np.testing.assert_allclose(f_band, f_full[keep])
+    np.testing.assert_allclose(psd_band, psd_full[:, keep])
+
+    # band-limited STFT equals a slice of the full-band result
+    f_all, t_all, z_all = h.compute_stft(nperseg=256, noverlap=128)
+    f_lim, t_lim, z_lim = h.compute_stft(nperseg=256, noverlap=128,
+                                         f_min=2.0e5, f_max=3.0e5)
+    np.testing.assert_allclose(f_lim, f_all[keep])
+    np.testing.assert_allclose(t_lim, t_all)
+    np.testing.assert_allclose(z_lim, z_all[:, keep, :])
+
+    # STFT peaks: bin-exact tones at 125 kHz and 250 kHz
+    pf = h.stft_peak_frequency(nperseg=256, noverlap=128)
+    np.testing.assert_allclose(pf, [[125000.0], [250000.0]], atol=4e3)
+    pf_band = h.stft_peak_frequency(nperseg=256, noverlap=128,
+                                    f_min=2.0e5, f_max=3.0e5)
+    np.testing.assert_allclose(pf_band, [[250000.0], [250000.0]], atol=4e3)
+    pt = h.stft_peak_time(nperseg=256, noverlap=128)
+    assert pt.shape == (2, 1)
+    assert np.all(np.isfinite(pt))
+
+    with pytest.raises(ValueError):
+        h.psd(nperseg=256, noverlap=128, f_min=3.0e5, f_max=2.0e5)
+    with pytest.raises(ValueError):
+        h.psd(nperseg=256, noverlap=128, f_max=1.0e9)

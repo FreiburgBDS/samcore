@@ -139,6 +139,8 @@ h5samd_result read_h5samd(const std::filesystem::path& path) {
     try {
         H5::H5File file(path.string(), H5F_ACC_RDONLY);
 
+        detail::warn_if_newer_format(file, "read_h5samd(" + path.string() + ")");
+
         h5samd_result result;
         size_t x_cols = 0;
         if (file.nameExists("X")) {
@@ -174,6 +176,7 @@ h5samd_lazy_handle read_h5samd_lazy(const std::filesystem::path& path) {
     }
     try {
         H5::H5File file(path.string(), H5F_ACC_RDONLY);
+        detail::warn_if_newer_format(file, "read_h5samd_lazy(" + path.string() + ")");
         auto state = std::make_unique<h5samd_lazy_state>();
 
         if (file.nameExists("X")) {
@@ -181,7 +184,8 @@ h5samd_lazy_handle read_h5samd_lazy(const std::filesystem::path& path) {
             const auto [rows, cols] = dataset_dims(dset);
             state->x_rows = rows;
             state->x_cols = cols;
-            state->x.emplace(std::move(dset));
+            state->x.emplace(file, std::move(dset), rows, cols,
+                             H5::PredType::NATIVE_FLOAT);
         }
 
         h5samd_lazy_handle handle;
@@ -195,15 +199,16 @@ h5samd_lazy_handle read_h5samd_lazy(const std::filesystem::path& path) {
         if (file.nameExists("Z")) {
             H5::DataSet dset = file.openDataSet("Z");
             state->z_cols = dataset_dims(dset).second;
-            state->z.emplace(std::move(dset));
+            state->z.emplace(file, std::move(dset), state->x_rows,
+                             state->z_cols, H5::PredType::NATIVE_FLOAT);
         }
         if (file.nameExists("V")) {
             H5::DataSet dset = file.openDataSet("V");
             state->v_cols = dataset_dims(dset).second;
-            state->v.emplace(std::move(dset));
+            state->v.emplace(file, std::move(dset), state->x_rows,
+                             state->v_cols, H5::PredType::NATIVE_FLOAT);
         }
 
-        state->file = std::move(file);
         handle.data = std::move(state);
         return handle;
     } catch (const H5::Exception&) {
@@ -214,13 +219,16 @@ h5samd_lazy_handle read_h5samd_lazy(const std::filesystem::path& path) {
 h5samd_lazy_data read_h5samd_lazy_data(h5samd_lazy_state& state) {
     h5samd_lazy_data out;
     if (state.x) {
-        out.x = detail::read_2d<float>(*state.x, H5::PredType::NATIVE_FLOAT);
+        out.x = array2d<float>(state.x->rows(), state.x->cols());
+        state.x->read_rows(0, state.x->rows(), out.x.data());
     }
     if (state.z) {
-        out.z = detail::read_2d<float>(*state.z, H5::PredType::NATIVE_FLOAT);
+        out.z = array2d<float>(state.z->rows(), state.z->cols());
+        state.z->read_rows(0, state.z->rows(), out.z->data());
     }
     if (state.v) {
-        out.v = detail::read_2d<float>(*state.v, H5::PredType::NATIVE_FLOAT);
+        out.v = array2d<float>(state.v->rows(), state.v->cols());
+        state.v->read_rows(0, state.v->rows(), out.v->data());
     }
     return out;
 }
@@ -237,6 +245,8 @@ void write_h5samd(const std::filesystem::path& path, const array2d<float>& x,
     }
     try {
         H5::H5File file(path.string(), H5F_ACC_TRUNC);
+
+        detail::write_format_version(file);
 
         detail::write_2d_gzip(file, "X", x, H5::PredType::NATIVE_FLOAT);
 
@@ -328,13 +338,23 @@ void convert_h5sam_to_h5samd(
         std::vector<std::int64_t> scan_counts;
 
         for (const auto& path : input_paths) {
-            h5sam_result res = read_h5sam(path);
-            scan_counts.push_back(static_cast<std::int64_t>(res.data.rows()));
-            scanlens.push_back(static_cast<std::int32_t>(res.data.cols()));
-            cube_shapes.emplace_back(static_cast<std::int32_t>(res.header.nlines),
-                                     static_cast<std::int32_t>(res.header.scanspline));
-            cube_resolutions.push_back(res.header.resolution);
-            labels_list.push_back(std::move(res.labels));
+            // Metadata-only open: header/labels/starts are read eagerly and
+            // the signal dataset is never touched in this pass (it is read
+            // once in phase 2).
+            io::h5sam_lazy_handle meta = io::read_h5sam_lazy(path);
+            if (!meta.data) {
+                throw std::runtime_error(
+                    "convert_h5sam_to_h5samd: missing data handle for " +
+                    path.string());
+            }
+            scan_counts.push_back(
+                static_cast<std::int64_t>(meta.data->reader.rows()));
+            scanlens.push_back(
+                static_cast<std::int32_t>(meta.data->reader.cols()));
+            cube_shapes.emplace_back(static_cast<std::int32_t>(meta.header.nlines),
+                                     static_cast<std::int32_t>(meta.header.scanspline));
+            cube_resolutions.push_back(meta.header.resolution);
+            labels_list.push_back(std::move(meta.labels));
         }
 
         const std::int64_t total_signals =
@@ -361,6 +381,7 @@ void convert_h5sam_to_h5samd(
 
         // Phase 2: create the output and stream data per file.
         H5::H5File out(output_path.string(), H5F_ACC_TRUNC);
+        detail::write_format_version(out);
 
         {
             const hsize_t dims[2] = {static_cast<hsize_t>(total_signals),

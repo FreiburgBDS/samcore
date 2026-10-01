@@ -13,7 +13,9 @@ void bind_submodules(nb::module_& m) {
         "same shape as ``data``.");
     pp.def("lp",
            [](in_f32_2 data, double cutoff, double fs) {
-               return to_numpy(preprocessing::lp(view_in<float>(data), cutoff, fs));
+               return to_numpy(without_gil([&] {
+                   return preprocessing::lp(view_in<float>(data), cutoff, fs);
+               }));
            },
            nb::arg("data"), nb::arg("cutoff"), nb::arg("fs"),
            nb::sig(
@@ -29,8 +31,10 @@ void bind_submodules(nb::module_& m) {
                    "    Sampling rate in Hz.");
     pp.def("bp",
            [](in_f32_2 data, double cutoff_low, double cutoff_high, double fs) {
-               return to_numpy(preprocessing::bp(view_in<float>(data), cutoff_low,
-                                                 cutoff_high, fs));
+               return to_numpy(without_gil([&] {
+                   return preprocessing::bp(view_in<float>(data), cutoff_low,
+                                            cutoff_high, fs);
+               }));
            },
            nb::arg("data"), nb::arg("cutoff_low"), nb::arg("cutoff_high"),
            nb::arg("fs"),
@@ -49,7 +53,9 @@ void bind_submodules(nb::module_& m) {
                    "    Sampling rate in Hz.");
     pp.def("normalize",
            [](in_f32_2 data, const std::string& mode) {
-               return to_numpy(preprocessing::normalize(view_in<float>(data), mode));
+               return to_numpy(without_gil([&] {
+                   return preprocessing::normalize(view_in<float>(data), mode);
+               }));
            },
            nb::arg("data"), nb::arg("mode") = "minmax",
            nb::sig(
@@ -65,9 +71,10 @@ void bind_submodules(nb::module_& m) {
                    "(scale to [0, 1]).");
     pp.def("savgol",
            [](in_f32_2 data, size_t window_length, size_t polyorder) {
-               return to_numpy(
-                   preprocessing::savgol(view_in<float>(data), window_length,
-                                         polyorder));
+               return to_numpy(without_gil([&] {
+                   return preprocessing::savgol(view_in<float>(data),
+                                                window_length, polyorder);
+               }));
            },
            nb::arg("data"), nb::arg("window_length") = 5,
            nb::arg("polyorder") = 2,
@@ -84,13 +91,19 @@ void bind_submodules(nb::module_& m) {
                    "    Polynomial order.");
     pp.def("medfilt",
            [](in_f32_2 data, size_t kernel_size) {
-               return to_numpy(preprocessing::medfilt(view_in<float>(data),
-                                                      kernel_size));
+               return to_numpy(without_gil([&] {
+                   return preprocessing::medfilt(view_in<float>(data),
+                                                 kernel_size);
+               }));
            },
            nb::arg("data"), nb::arg("kernel_size") = 3,
            nb::sig(
                "def medfilt(data: numpy.typing.NDArray[numpy.float32], kernel_size: int = 3) -> numpy.typing.NDArray[numpy.float32]"),
            "Median filter with an odd kernel size.\n\n"
+                   "Edges use whole-sample reflect padding (``numpy.pad`` "
+                   "mode ``'reflect'``): the interior matches "
+                   "``scipy.signal.medfilt``, the edges do not (scipy "
+                   "zero-pads).\n\n"
                    "Parameters\n"
                    "----------\n"
                    "data : ndarray (float32)\n"
@@ -99,7 +112,9 @@ void bind_submodules(nb::module_& m) {
                    "    Odd kernel size.");
     pp.def("gate",
            [](in_f32_2 data, size_t start, size_t end) {
-               return to_numpy(preprocessing::gate(view_in<float>(data), start, end));
+               return to_numpy(without_gil([&] {
+               return preprocessing::gate(view_in<float>(data), start, end);
+           }));
            },
            nb::arg("data"), nb::arg("start") = 0, nb::arg("end") = 0,
            nb::sig(
@@ -115,19 +130,23 @@ void bind_submodules(nb::module_& m) {
                    "    Last sample to keep (exclusive); 0 means the full "
                    "scan length.");
     pp.def("detrend", [](in_f32_2 data) {
-        return to_numpy(preprocessing::detrend(view_in<float>(data)));
+        return to_numpy(without_gil(
+               [&] { return preprocessing::detrend(view_in<float>(data)); }));
     }, nb::sig(
            "def detrend(data: numpy.typing.NDArray[numpy.float32]) -> numpy.typing.NDArray[numpy.float32]"),
        "Remove a linear trend from every signal.");
     pp.def("envelope", [](in_f32_2 data) {
-        return to_numpy(preprocessing::envelope(view_in<float>(data)));
+        return to_numpy(without_gil(
+               [&] { return preprocessing::envelope(view_in<float>(data)); }));
     }, nb::sig(
            "def envelope(data: numpy.typing.NDArray[numpy.float32]) -> numpy.typing.NDArray[numpy.float32]"),
        "Hilbert envelope of every signal.");
     pp.def("moving_average",
            [](in_f32_2 data, size_t window) {
-               return to_numpy(
-                   preprocessing::moving_average(view_in<float>(data), window));
+               return to_numpy(without_gil([&] {
+                   return preprocessing::moving_average(view_in<float>(data),
+                                                        window);
+               }));
            },
            nb::arg("data"), nb::arg("window") = 5,
            nb::sig(
@@ -145,13 +164,16 @@ void bind_submodules(nb::module_& m) {
     nb::module_ ut = m.def_submodule(
         "utils", "Utility functions for signal analysis.");
     ut.def("kurt", [](in_f32_2 data) {
-        return to_numpy(utils::kurt(view_in<float>(data)));
+        return to_numpy(without_gil(
+           [&] { return utils::kurt(view_in<float>(data)); }));
     }, nb::arg("data"),
        nb::sig(
            "def kurt(data: numpy.typing.NDArray[numpy.float32]) -> numpy.typing.NDArray[numpy.float64]"),
        "Kurtosis of each signal (rows of ``data``).\n\n"
                "Pearson kurtosis (bias-corrected = False, fisher = False), "
-               "matching ``scipy.stats.kurtosis(..., fisher=False)``.");
+               "matching ``scipy.stats.kurtosis(..., fisher=False)``.  "
+               "Constant (zero-variance) rows return 0 instead of scipy's "
+               "NaN, because ``-ffast-math`` makes NaN values unreliable.");
     ut.def("time_index",
            [](double tzero, double delta_t, size_t num) {
                return to_numpy(utils::time_index(tzero, delta_t, num));
@@ -159,7 +181,9 @@ void bind_submodules(nb::module_& m) {
            nb::arg("tzero"), nb::arg("delta_t"), nb::arg("num"),
            nb::sig(
                "def time_index(tzero: float, delta_t: float, num: int) -> numpy.typing.NDArray[numpy.float64]"),
-           "Time axis ``tzero + i * delta_t`` for ``num`` samples.\n\n"
+           "Time axis ``tzero + i * delta_t`` (end-exclusive) for ``num`` "
+                   "samples.  All three values are in the same time unit "
+                   "(ns for SAM data).\n\n"
                    "Parameters\n"
                    "----------\n"
                    "tzero : float\n"
@@ -171,7 +195,8 @@ void bind_submodules(nb::module_& m) {
     ut.def("fft_spec",
            [](in_f32_1 scan, double d) {
                std::vector<float> v = copy_in<float>(scan);
-               auto [mag, freqs] = utils::fft_spec(v, d);
+               auto [mag, freqs] =
+                   without_gil([&] { return utils::fft_spec(v, d); });
                return nb::make_tuple(to_numpy(std::move(mag)),
                                      to_numpy(std::move(freqs)));
            },
@@ -184,15 +209,40 @@ void bind_submodules(nb::module_& m) {
                    "scan : ndarray (float32)\n"
                    "    One signal.\n"
                    "d : float, optional\n"
-                   "    Sample spacing (inverse of the sampling rate).\n\n"
+                   "    Sample spacing (inverse of the sampling rate), in any "
+                   "time unit.\n\n"
                    "Returns\n"
                    "-------\n"
                    "(magnitude, freqs) : tuple of ndarray\n"
-                   "    The magnitude spectrum and its frequency bins "
-                   "(numpy rfft/rfftfreq parity).");
+                   "    The magnitude spectrum and its frequency bins in 1/d units "
+                   "(numpy rfft/rfftfreq parity); with ``d`` in ns the bins are in GHz.");
+    ut.def("fft_spectrum",
+           [](in_f32_2 data, double d) {
+               auto [mag, freqs] = without_gil(
+                   [&] { return utils::fft_spectrum(view_in<float>(data), d); });
+               return nb::make_tuple(to_numpy(std::move(mag)),
+                                     to_numpy(std::move(freqs)));
+           },
+           nb::arg("data"), nb::arg("d") = 1.0,
+           nb::sig(
+               "def fft_spectrum(data: numpy.typing.NDArray[numpy.float32], d: float = 1.0) -> tuple[numpy.typing.NDArray[numpy.float32], numpy.typing.NDArray[numpy.float32]]"),
+           "One-sided FFT magnitude of every signal (batched, float32).\n\n"
+                   "Parameters\n"
+                   "----------\n"
+                   "data : ndarray (float32)\n"
+                   "    Signals of shape (n_signals, n_samples).\n"
+                   "d : float, optional\n"
+                   "    Sample spacing (inverse of the sampling rate), in any "
+                   "time unit.\n\n"
+                   "Returns\n"
+                   "-------\n"
+                   "(magnitude, freqs) : tuple of ndarray\n"
+                   "    Magnitude of shape (n_signals, n_freqs) and the "
+                   "frequency bins in 1/d units (numpy rfft/rfftfreq parity); with ``d`` in ns the bins are in GHz.");
     ut.def("spectral_entropy",
            [](in_f32_2 psd, double base) {
-               return to_numpy(utils::spectral_entropy(view_in<float>(psd), base));
+               return to_numpy(without_gil(
+               [&] { return utils::spectral_entropy(view_in<float>(psd), base); }));
            },
            nb::arg("psd"), nb::arg("base") = 2.0,
            nb::sig(
@@ -207,7 +257,8 @@ void bind_submodules(nb::module_& m) {
                    "base : float, optional\n"
                    "    Logarithm base.");
     ut.def("spectral_flatness", [](in_f32_2 psd) {
-        return to_numpy(utils::spectral_flatness(view_in<float>(psd)));
+        return to_numpy(without_gil(
+           [&] { return utils::spectral_flatness(view_in<float>(psd)); }));
     }, nb::arg("psd"),
        nb::sig(
            "def spectral_flatness(psd: numpy.typing.NDArray[numpy.float32]) -> numpy.typing.NDArray[numpy.float64]"),
@@ -215,8 +266,10 @@ void bind_submodules(nb::module_& m) {
                "matrix.");
     ut.def("spectral_centroid",
            [](in_f32_1 freqs, in_f32_2 psd) {
-               return to_numpy(utils::spectral_centroid(
-                   copy_in<float>(freqs), view_in<float>(psd)));
+               return to_numpy(without_gil([&] {
+                   return utils::spectral_centroid(copy_in<float>(freqs),
+                                                   view_in<float>(psd));
+               }));
            },
            nb::arg("freqs"), nb::arg("psd"),
            nb::sig(
@@ -226,13 +279,16 @@ void bind_submodules(nb::module_& m) {
                    "Parameters\n"
                    "----------\n"
                    "freqs : ndarray (float32)\n"
-                   "    Frequency bins (n_freqs,).\n"
+                   "    Frequency bins (n_freqs,) in Hz for PSDs from ``psd()``.\n"
                    "psd : ndarray (float32)\n"
                    "    PSD of shape (n_signals, n_freqs).");
     ut.def("spectral_energy_ratio",
            [](in_f32_1 freqs, in_f32_2 psd, double critical_freq) {
-               return to_numpy(utils::spectral_energy_ratio(
-                   copy_in<float>(freqs), view_in<float>(psd), critical_freq));
+               return to_numpy(without_gil([&] {
+                   return utils::spectral_energy_ratio(copy_in<float>(freqs),
+                                                       view_in<float>(psd),
+                                                       critical_freq);
+               }));
            },
            nb::arg("freqs"), nb::arg("psd"), nb::arg("critical_freq"),
            nb::sig(
@@ -243,18 +299,19 @@ void bind_submodules(nb::module_& m) {
                    "Parameters\n"
                    "----------\n"
                    "freqs : ndarray (float32)\n"
-                   "    Frequency bins (n_freqs,).\n"
+                   "    Frequency bins (n_freqs,) in Hz for PSDs from ``psd()``.\n"
                    "psd : ndarray (float32)\n"
                    "    PSD of shape (n_signals, n_freqs).\n"
                    "critical_freq : float\n"
-                   "    Frequency separating the two energy bands.");
+                   "    Frequency separating the two energy bands, in the same "
+                   "unit as ``freqs``.");
 
     // file I/O
 
     nb::module_ io = m.def_submodule(
         "io", "Reading and writing .h5sam / .h5samd files.");
     io.def("read_h5sam", [](const std::string& path) {
-        auto r = samcore::io::read_h5sam(path);
+        auto r = without_gil([&] { return samcore::io::read_h5sam(path); });
         return nb::make_tuple(to_numpy(std::move(r.data)),
                               nb::cast(std::move(r.header)),
                               nb::cast(std::move(r.labels)),
@@ -277,9 +334,12 @@ void bind_submodules(nb::module_& m) {
            [](const std::string& path, in_i8_2 data, sam_header header,
               sam_labels labels,
               std::optional<std::vector<std::int32_t>> starts) {
-               samcore::io::write_h5sam(path, copy_in<std::int8_t>(data),
-                                        std::move(header), std::move(labels),
-                                        std::move(starts));
+               without_gil([&] {
+                   samcore::io::write_h5sam(path, copy_in<std::int8_t>(data),
+                                            std::move(header),
+                                            std::move(labels),
+                                            std::move(starts));
+               });
            },
            nb::arg("path"), nb::arg("data"), nb::arg("header"),
            nb::arg("samlabels"), nb::arg("starts") = nb::none(),
@@ -287,21 +347,29 @@ void bind_submodules(nb::module_& m) {
                "def write_h5sam(path: str, data: numpy.typing.NDArray[numpy.int8], header: SAMHeader, samlabels: SAMLabels, starts: collections.abc.Sequence[int] | None = None) -> None"),
            "Write an int8 signal array plus header, labels and "
                    "optional starts to a .h5sam file.");
-    io.def("read_h5samd", [](const std::string& path, bool mmap) {
-        return sam_dataset::load(path, mmap);
-    }, nb::arg("path"), nb::arg("mmap") = false,
-       nb::sig("def read_h5samd(path: str, mmap: bool = False) -> SAMDataset"),
+    io.def("read_h5samd",
+           [](const std::string& path, bool lazy) {
+               return without_gil([&] {
+                   return sam_dataset::load(path, lazy);
+               });
+           },
+           nb::arg("path"), nb::arg("lazy") = false,
+       nb::sig("def read_h5samd(path: str, lazy: bool = False) -> SAMDataset"),
        "Read a .h5samd file as a :class:`SAMDataset`.\n\n"
-               "With ``mmap=True`` the X/Z/V arrays stay on disk until "
-               "first accessed (lazy loading).");
+               "With ``lazy=True`` X/Z/V stay on disk and are decoded in "
+               "cached row blocks on demand (paged lazy reading, not memory "
+               "mapping).");
     io.def("convert_h5sam_to_h5samd",
            [](const std::vector<std::string>& input_paths,
               const std::string& output_path, float pad_value,
               std::optional<bool> unsupervised) {
                std::vector<std::filesystem::path> paths;
                for (const auto& p : input_paths) paths.emplace_back(p);
-               samcore::io::convert_h5sam_to_h5samd(paths, output_path,
-                                                    pad_value, unsupervised);
+               without_gil([&] {
+                   samcore::io::convert_h5sam_to_h5samd(paths, output_path,
+                                                        pad_value,
+                                                        unsupervised);
+               });
            },
            nb::arg("input_paths"), nb::arg("output_path"),
            nb::arg("pad_value") = 0.0f, nb::arg("unsupervised") = nb::none(),

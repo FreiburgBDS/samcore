@@ -21,7 +21,7 @@
 //   --scanlen N     samples per scan               default 5000
 //   --samplerate F  sampling rate [MHz]            default 2500
 //   --tzero N       time origin [ns]               default 15000
-//   --resolution F  lateral resolution [um/px]     default 400
+//   --resolution F  lateral resolution [µm/px]     default 400
 //   --period N      sine period [samples]          default 400
 //   --amplitude N   sine amplitude [int8 LSB]      default 82
 //   --noise-mean F  gaussian noise mean            default 19
@@ -79,7 +79,7 @@ void usage() {
         "  --scanlen N      samples per scan               default 5000\n"
         "  --samplerate F   sampling rate [MHz]            default 2500\n"
         "  --tzero N        time origin [ns]               default 15000\n"
-        "  --resolution F   lateral resolution [um/px]     default 400\n"
+        "  --resolution F   lateral resolution [µm/px]     default 400\n"
         "  --period N       sine period [samples]          default 400\n"
         "  --amplitude N    sine amplitude [int8 LSB]      default 82\n"
         "  --noise-mean F   gaussian noise mean            default 19\n"

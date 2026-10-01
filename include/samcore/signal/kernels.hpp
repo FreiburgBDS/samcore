@@ -27,6 +27,18 @@ struct spectrogram_result {
     array3d<float> sxx;        // (n_signals, n_freqs, n_frames)
 };
 
+// One-sided FFT magnitude of every signal (numpy.fft.rfft parity).
+struct spectrum_result {
+    std::vector<float> f;   // (n_freqs,) Hz (d is the sample spacing)
+    array2d<float> mag;     // (n_signals, n_freqs)
+};
+
+// Per-signal STFT magnitude peaks.
+struct stft_peaks_result {
+    std::vector<float> peak_frequency; // (n_signals,) Hz
+    std::vector<float> peak_time;      // (n_signals,) seconds
+};
+
 // FFT / windows
 
 // Real-input one-sided FFT of a signal.  Complex output size n/2+1.
@@ -43,18 +55,37 @@ struct spectrogram_result {
 // Spectral estimators (scipy.signal parity)
 
 // One-sided STFT, scaling='spectrum', detrend=False, boundary=None,
-// padded=False.  fs in Hz.
+// padded=False.  fs in Hz.  With f_max > 0 only bins in [f_min, f_max] are
+// returned (f_max = 0 means Nyquist).
 [[nodiscard]] stft_result stft(const array2d<float>& data, double fs,
-                               size_t nperseg, size_t noverlap);
+                               size_t nperseg, size_t noverlap,
+                               double f_min = 0.0, double f_max = 0.0);
 
 // Welch PSD, scaling='density', detrend=False, averaged over frames.
 [[nodiscard]] psd_result welch_psd(const array2d<float>& data, double fs,
-                                   size_t nperseg, size_t noverlap);
+                                   size_t nperseg, size_t noverlap,
+                                   double f_min = 0.0, double f_max = 0.0);
 
 // Per-frame power spectral density (scipy.signal.spectrogram, mode='psd').
 [[nodiscard]] spectrogram_result spectrogram_psd(const array2d<float>& data,
                                                  double fs, size_t nperseg,
-                                                 size_t noverlap);
+                                                 size_t noverlap,
+                                                 double f_min = 0.0,
+                                                 double f_max = 0.0);
+
+// Per-signal peaks of the STFT magnitude: the frequency with the largest
+// max-over-frames magnitude and the time with the largest max-over-frequencies
+// magnitude.  Band-limited like stft().
+[[nodiscard]] stft_peaks_result stft_peaks(const array2d<float>& data,
+                                           double fs, size_t nperseg,
+                                           size_t noverlap, double f_min = 0.0,
+                                           double f_max = 0.0);
+
+// One-sided FFT magnitude of every signal, batched through pocketfft.  d is
+// the sample spacing (1/fs) for the frequency axis; values match
+// np.abs(np.fft.rfft(data, axis=1)).
+[[nodiscard]] spectrum_result fft_spectrum(const array2d<float>& data,
+                                           double d = 1.0);
 
 // IIR filters
 
@@ -109,9 +140,22 @@ butter_bandpass(double cutoff_low, double cutoff_high, double fs);
 [[nodiscard]] std::vector<double> savgol_coeffs(size_t window_length,
                                                 size_t polyorder);
 
-// 1-D median filter with reflect-padded edges, odd kernel
-// (scipy.signal.medfilt / scipy.ndimage.median_filter default 'reflect').
+// 1-D median filter with an odd kernel and whole-sample reflect padding
+// (numpy.pad mode='reflect' semantics: x[-1] mirrors x[1]).  Interior
+// samples match scipy.signal.medfilt / scipy.ndimage.median_filter; the
+// edge padding deliberately differs from scipy.signal.medfilt (which
+// zero-pads) and from scipy.ndimage's mode='reflect' (which duplicates the
+// edge sample).
 [[nodiscard]] std::vector<double> medfilt1d(std::span<const double> x,
                                             size_t kernel_size);
+
+// Integer lag of `x` relative to `ref` maximizing the mean-subtracted
+// cross-correlation over lags [-max_shift, max_shift].  A positive lag means
+// `x` is delayed by that many samples relative to `ref`.  Both signals must
+// have the same length.  FFT-based (zero-padded to 2n); ties prefer the
+// positive lag and then the smaller |lag|.
+[[nodiscard]] std::int64_t xcorr_lag(std::span<const std::int8_t> x,
+                                     std::span<const std::int8_t> ref,
+                                     std::int64_t max_shift);
 
 } // namespace samcore::signal

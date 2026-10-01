@@ -18,12 +18,20 @@ Typical workflow::
     dataset.train_test_split(test_size=0.2)
     for X, y, spatial in dataset.batches(batch_size=64):
         ...
+
+Data conventions: times are in ns, frequencies in MHz (matching
+``header.samplerate``) and lateral distances in µm.  Results for gates
+without an echo use the finite sentinel :data:`NO_TOF` (-1.0) instead of
+NaN, because Release builds compile with ``-ffast-math``, where NaN
+values are unreliable across compilers.
 """
 
-from samcore._samcore import (SAMDataset, SAMHeader, SAMLabels, SAMScan,
-                              merge_labels, preprocessing, utils)
+from samcore._samcore import (FULL_SCALE, NO_TOF, SAMDataset, SAMHeader,
+                              SAMLabels, SAMScan, merge_labels,
+                              preprocessing, utils)
 
 from samcore import _dataset, _labels, _scan
+from samcore import interop
 from samcore._io import io
 
 try:

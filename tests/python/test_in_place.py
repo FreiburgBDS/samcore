@@ -218,18 +218,21 @@ def test_rectangle_select_metadata_both_paths() -> None:
         np.testing.assert_array_equal(r.starts, starts_before[idx])
 
 
-def test_time_range_select_drops_starts_both_paths() -> None:
+def test_time_range_select_preserves_starts_both_paths() -> None:
     for in_place in (False, True):
         h = _make_handler()
         before = h.data.copy()
+        starts_before = np.array(h.starts, copy=True)
         tz, sp = h.header.tzero, h.samplespacing
         r = h.time_range_select(tz + sp * 10, tz + sp * 70, in_place=in_place)
-        assert r.starts is None
         np.testing.assert_array_equal(r.data, before[:, 10:70])
+        # valid starts advance by the slice offset; tzero is unchanged
+        np.testing.assert_array_equal(r.starts, starts_before + 10)
+        assert r.header.tzero == h.header.tzero
 
 
 @needs_data
-class TestMmapInPlaceContract:
+class TestLazyInPlaceContract:
     def test_not_in_place_materializes_and_is_independent(self) -> None:
         ops: List[Tuple[str, Op]] = [
             ("rotate", lambda h, ip: h.rotate(90, in_place=ip)),
@@ -238,7 +241,7 @@ class TestMmapInPlaceContract:
         ]
         for _, op in ops:
             eager = SAMScan(H5_PATH)
-            lazy = SAMScan(H5_PATH, mmap=True)
+            lazy = SAMScan(H5_PATH, lazy=True)
             r = op(lazy, False)
             assert r is not lazy
             assert r.loaded is True
@@ -249,7 +252,7 @@ class TestMmapInPlaceContract:
     def test_in_place_true_materializes_and_mutates(self) -> None:
         eager = SAMScan(H5_PATH)
         eager.rotate(90, in_place=True)
-        lazy = SAMScan(H5_PATH, mmap=True)
+        lazy = SAMScan(H5_PATH, lazy=True)
         r = lazy.rotate(90, in_place=True)
         assert r is lazy
         assert lazy.loaded is True

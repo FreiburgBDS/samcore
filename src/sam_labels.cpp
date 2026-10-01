@@ -119,7 +119,7 @@ void sam_labels::verify_integrity() const {
         throw std::invalid_argument(
             "Labels array contains invalid values (less than -1).");
     }
-    if (!label_names_.empty() &&
+    if (!label_names_.empty() && max_label() >= 0 &&
         static_cast<size_t>(max_label()) >= label_names_.size()) {
         throw std::invalid_argument(
             "Label names list does not cover all label indices.");
@@ -254,6 +254,103 @@ void sam_labels::clean_labels() {
     }
     labels_ = std::move(new_labels);
     label_names_ = std::move(new_names);
+}
+
+namespace {
+
+// Resolve an int-or-name label reference; throws for unknown names.
+std::int8_t resolve_label_ref(
+    const sam_labels& labels,
+    const std::variant<std::int8_t, std::string>& label) {
+    if (std::holds_alternative<std::int8_t>(label)) {
+        return std::get<std::int8_t>(label);
+    }
+    const auto& name = std::get<std::string>(label);
+    const auto value = labels.name_to_value(name);
+    if (value == sam_labels::label_unlabeled &&
+        lower(name) != sam_labels::label_name_unlabeled) {
+        throw std::invalid_argument("Label name not found: " + name);
+    }
+    return value;
+}
+
+} // namespace
+
+std::int8_t sam_labels::add_label(const std::string& name) {
+    if (name.empty()) {
+        throw std::invalid_argument("Label name cannot be empty.");
+    }
+    const std::string l = lower(name);
+    if (l == label_name_healthy || l == label_name_unlabeled) {
+        throw std::invalid_argument("Label name is reserved: " + name);
+    }
+    if (has_name(name)) {
+        throw std::invalid_argument("Label name already exists: " + name);
+    }
+    if (label_names_.empty()) {
+        label_names_.push_back(label_name_healthy);
+    }
+    const std::int8_t max_val = max_label();
+    if (max_val >= 0) {
+        while (label_names_.size() <= static_cast<size_t>(max_val)) {
+            label_names_.push_back(
+                "label" + std::to_string(label_names_.size()));
+        }
+    }
+    if (label_names_.size() >= 128) {
+        throw std::length_error("Label registry is full (int8 space).");
+    }
+    label_names_.push_back(name);
+    return static_cast<std::int8_t>(label_names_.size() - 1);
+}
+
+void sam_labels::rename_label(std::variant<std::int8_t, std::string> label,
+                              const std::string& name) {
+    if (name.empty()) {
+        throw std::invalid_argument("Label name cannot be empty.");
+    }
+    const std::string l = lower(name);
+    if (l == label_name_healthy || l == label_name_unlabeled) {
+        throw std::invalid_argument("Label name is reserved: " + name);
+    }
+    const std::int8_t value = resolve_label_ref(*this, label);
+    if (value <= label_healthy) {
+        throw std::invalid_argument(
+            "The healthy and unlabeled labels cannot be renamed.");
+    }
+    for (size_t i = 0; i < label_names_.size(); ++i) {
+        if (static_cast<std::int8_t>(i) != value &&
+            lower(label_names_[i]) == l) {
+            throw std::invalid_argument("Label name already exists: " + name);
+        }
+    }
+    const std::int8_t max_val = max_label();
+    if (max_val >= 0) {
+        while (label_names_.size() <= static_cast<size_t>(max_val)) {
+            label_names_.push_back(
+                "label" + std::to_string(label_names_.size()));
+        }
+    }
+    if (label_names_.empty()) {
+        label_names_.push_back(label_name_healthy);
+    }
+    if (static_cast<size_t>(value) >= label_names_.size()) {
+        throw std::invalid_argument(
+            "Label value has no registry entry: " + std::to_string(value));
+    }
+    label_names_[static_cast<size_t>(value)] = name;
+}
+
+void sam_labels::delete_label(std::variant<std::int8_t, std::string> label) {
+    const std::int8_t value = resolve_label_ref(*this, label);
+    if (value <= label_healthy) {
+        throw std::invalid_argument(
+            "The healthy and unlabeled labels cannot be deleted.");
+    }
+    for (auto& v : labels_) {
+        if (v == value) v = label_unlabeled;
+    }
+    clean_labels();
 }
 
 void sam_labels::relabel(

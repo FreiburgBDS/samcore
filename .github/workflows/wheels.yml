@@ -82,7 +82,9 @@ jobs:
           CIBW_BEFORE_BUILD_WINDOWS: python -m pip install delvewheel
           CIBW_REPAIR_WHEEL_COMMAND_WINDOWS: >-
             delvewheel repair --add-path "%HDF5_ROOT%\bin" -w {dest_dir} {wheel}
-          CIBW_TEST_REQUIRES: pytest
+          # The [test] extra carries pytest + scipy, so the scipy medfilt
+          # parity check runs here too.
+          CIBW_TEST_EXTRAS: test
           CIBW_TEST_COMMAND: >-
             pytest {project}/tests/python -v -p no:cacheprovider
 

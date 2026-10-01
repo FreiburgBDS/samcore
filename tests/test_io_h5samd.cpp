@@ -2,6 +2,8 @@
 
 #include <filesystem>
 
+#include <H5Cpp.h>
+
 #include <samcore/sam_dataset.hpp>
 
 namespace {
@@ -116,7 +118,7 @@ TEST(sam_dataset, SpatialProvenance) {
     ASSERT_EQ(sp.size(), 6);
     EXPECT_EQ(sp[0].idx, 0);
     EXPECT_FLOAT_EQ(sp[0].x, 0.0f);
-    // shape (2 lines, 3 cols); res 1000 um/px = 1 mm/px
+    // shape (2 lines, 3 cols); res 1000 µm/px = 1 mm/px
     EXPECT_FLOAT_EQ(sp[2].x, 2.0f);
     EXPECT_FLOAT_EQ(sp[3].x, 0.0f); // line 1, col 0
     EXPECT_FLOAT_EQ(sp[3].y, 1.0f);
@@ -132,7 +134,7 @@ TEST(sam_dataset, CubeExtraction) {
     EXPECT_FLOAT_EQ(cube.flat()[0], ds.X()[0][0]);
 }
 
-TEST(io_h5samd, MmapLazyLoad) {
+TEST(io_h5samd, LazyLoad) {
     sam_dataset ds({make_cube(2, 3, 8, 0, 1.0), make_cube(2, 3, 6, 3, 2.0)},
                    0.0f, true);
     ds.Z() = array2d<float>(ds.num_samples(), 2, 1.0f);
@@ -143,6 +145,8 @@ TEST(io_h5samd, MmapLazyLoad) {
 
     sam_dataset lazy = sam_dataset::load(out, true);
     EXPECT_FALSE(lazy.loaded());
+    EXPECT_FALSE(lazy.materialized());
+    EXPECT_EQ(lazy.backing(), "lazy");
     EXPECT_EQ(lazy.num_samples(), ds.num_samples());
     EXPECT_EQ(lazy.maxlen(), ds.maxlen());
     EXPECT_EQ(lazy.num_features(), ds.num_features());
@@ -162,11 +166,63 @@ TEST(io_h5samd, MmapLazyLoad) {
     // accessing data materializes it
     EXPECT_EQ(lazy.X(), ds.X());
     EXPECT_TRUE(lazy.loaded());
+    EXPECT_EQ(lazy.backing(), "eager");
     ASSERT_TRUE(lazy.Z().has_value());
     EXPECT_EQ(*lazy.Z(), *ds.Z());
     ASSERT_TRUE(lazy.V().has_value());
     EXPECT_EQ(*lazy.V(), *ds.V());
     std::filesystem::remove(out);
+}
+
+TEST(io_h5samd, LazyPagedRowReads) {
+    sam_dataset ds({make_cube(2, 3, 8, 0, 1.0), make_cube(2, 3, 6, 3, 2.0)},
+                   0.0f, true);
+    ds.Z() = array2d<float>(ds.num_samples(), 2, 1.0f);
+    const std::filesystem::path out = tmp_file("samcore_ds_lazy_rows.h5samd");
+    ds.save(out);
+
+    sam_dataset lazy = sam_dataset::load(out, true);
+    ASSERT_FALSE(lazy.loaded());
+    EXPECT_EQ(lazy.blocks_read(), 0u);
+
+    const std::vector<std::int64_t> idx{5, 0, 3, 5, 1};
+    auto x = lazy.read_rows(idx);
+    ASSERT_EQ(x.rows(), idx.size());
+    EXPECT_EQ(x.cols(), ds.maxlen());
+    for (size_t i = 0; i < idx.size(); ++i) {
+        for (size_t j = 0; j < x.cols(); ++j) {
+            EXPECT_FLOAT_EQ(x[i][j], ds.X()[static_cast<size_t>(idx[i])][j]);
+        }
+    }
+    EXPECT_FALSE(lazy.loaded());
+    EXPECT_GE(lazy.blocks_read(), 1u);
+
+    // Repeated reads reuse decoded blocks.
+    const size_t after_first = lazy.blocks_read();
+    (void)lazy.read_rows(idx);
+    EXPECT_EQ(lazy.blocks_read(), after_first);
+
+    // Z rows are paged too.
+    auto z = lazy.read_rows(idx, /*use_z=*/true);
+    ASSERT_EQ(z.rows(), idx.size());
+    for (size_t i = 0; i < idx.size(); ++i) {
+        for (size_t j = 0; j < z.cols(); ++j) {
+            EXPECT_FLOAT_EQ(z[i][j], (*ds.Z())[static_cast<size_t>(idx[i])][j]);
+        }
+    }
+    EXPECT_FALSE(lazy.loaded());
+
+    // Bounds and availability checks.
+    EXPECT_THROW(lazy.read_rows({static_cast<std::int64_t>(lazy.num_samples())}),
+                 std::out_of_range);
+
+    sam_dataset no_z({make_cube(2, 2, 4, 0, 1.0)}, 0.0f, true);
+    const std::filesystem::path out2 = tmp_file("samcore_ds_no_z.h5samd");
+    no_z.save(out2);
+    sam_dataset lazy2 = sam_dataset::load(out2, true);
+    EXPECT_THROW(lazy2.read_rows({0}, /*use_z=*/true), std::runtime_error);
+    std::filesystem::remove(out);
+    std::filesystem::remove(out2);
 }
 
 TEST(io_h5samd, LazyMaterializesOnCopyAndSave) {
@@ -288,4 +344,33 @@ TEST(sam_dataset, CopyPreservesZAndLabels) {
     EXPECT_EQ(c.labels()->label_names(), ds.labels()->label_names());
     ASSERT_TRUE(c.Z().has_value());
     EXPECT_EQ(*c.Z(), *ds.Z());
+}
+
+TEST(io_h5samd, FormatVersionAttributes) {
+    sam_dataset ds({make_cube(2, 2, 8, 0, 1.0)}, 0.0f, true);
+    const std::filesystem::path out = tmp_file("samcore_ds_version.h5samd");
+    ds.save(out);
+
+    {
+        H5::H5File f(out.string(), H5F_ACC_RDONLY);
+        ASSERT_TRUE(f.attrExists("samcore_format_version"));
+        std::int64_t v = 0;
+        f.openAttribute("samcore_format_version")
+            .read(H5::PredType::NATIVE_INT64, &v);
+        EXPECT_EQ(v, 1);
+        EXPECT_TRUE(f.attrExists("samcore_version"));
+    }
+
+    // A file from a newer library warns but still loads (eager and lazy).
+    {
+        H5::H5File rw(out.string(), H5F_ACC_RDWR);
+        H5::Attribute a = rw.openAttribute("samcore_format_version");
+        const std::int64_t future = 999;
+        a.write(H5::PredType::NATIVE_INT64, &future);
+    }
+    auto loaded = sam_dataset::load(out);
+    EXPECT_EQ(loaded.X(), ds.X());
+    auto lazy = sam_dataset::load(out, true);
+    EXPECT_EQ(lazy.X(), ds.X());
+    std::filesystem::remove(out);
 }

@@ -27,8 +27,10 @@ public:
                std::string cellid = {}, std::int64_t downsample_factor = 1,
                extra_map extra = {});
 
-    // Time axis in nanoseconds for the given sample range (linspace
-    // semantics: start and end inclusive, num = end - start).
+    // Time axis in ns for samples [start, end):
+    // t[i] = tzero + (start + i) / samplerate * 1e3 for
+    // i in [0, end - start).  `end` is exclusive; end < start (e.g. the
+    // default -1) means the full scanlen.
     [[nodiscard]] std::vector<double> time(std::int64_t start = 0,
                                            std::int64_t end = -1) const;
 
@@ -39,12 +41,14 @@ public:
     // byte-identical to a JSON-based hash; hash values are never persisted.
     [[nodiscard]] size_t hash() const;
 
-    std::int64_t scanspline = 0;
-    std::int64_t nlines = 0;
-    std::int64_t scanlen = 0;
-    double samplerate = 0.0;
-    std::int64_t tzero = 0;
-    double resolution = 0.0;
+    // Acquisition metadata.  Units follow the package convention:
+    // samplerate in MHz, tzero in ns, resolution in µm per pixel.
+    std::int64_t scanspline = 0; // scans per line
+    std::int64_t nlines = 0;     // scan lines
+    std::int64_t scanlen = 0;    // samples per A-scan
+    double samplerate = 0.0;     // MHz
+    std::int64_t tzero = 0;      // ns; time of sample 0
+    double resolution = 0.0;     // µm per pixel (lateral)
     bool interpolated = false;
     bool quality = true;
     std::string mode;

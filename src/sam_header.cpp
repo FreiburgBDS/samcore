@@ -26,16 +26,12 @@ std::vector<double> sam_header::time(std::int64_t start,
     if (end < start) end = scanlen;
     const std::int64_t num = end - start;
     if (num <= 0) return {};
-    const double start_time = tzero + start / samplerate * 1e3;
-    const double end_time = tzero + end / samplerate * 1e3;
+    // End-exclusive sample times: t[i] = tzero + (start + i) * spacing.
+    const double spacing = 1.0 / samplerate * 1e3;
     std::vector<double> out(static_cast<size_t>(num));
-    if (num == 1) {
-        out[0] = start_time;
-        return out;
-    }
-    const double step = (end_time - start_time) / static_cast<double>(num - 1);
     for (std::int64_t i = 0; i < num; ++i) {
-        out[static_cast<size_t>(i)] = start_time + step * static_cast<double>(i);
+        out[static_cast<size_t>(i)] =
+            tzero + static_cast<double>(start + i) * spacing;
     }
     return out;
 }

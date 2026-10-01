@@ -889,3 +889,54 @@ class TestDictSerialization:
         sl = SAMLabels.from_dict({"labels": [0, 1, 0]})
         np.testing.assert_array_equal(sl.labels, [0, 1, 0])
         assert sl.label_names == ["healthy"]
+
+
+# ── registry editing (add / rename / delete) ────────────────────────────────
+
+
+def test_add_label_registers_new_class():
+    labels = SAMLabels(np.array([0, 1, 0], dtype=np.int8), ["healthy", "a"])
+    value = labels.add_label("b")
+    assert value == 2
+    assert labels.label_names == ["healthy", "a", "b"]
+    assert labels.name_to_value("B") == 2
+    with pytest.raises(ValueError):
+        labels.add_label("b")
+    with pytest.raises(ValueError):
+        labels.add_label("healthy")
+    with pytest.raises(ValueError):
+        labels.add_label("unlabeled")
+    labels.verify_integrity()
+
+
+def test_rename_label():
+    labels = SAMLabels(np.array([0, 1, 2, -1], dtype=np.int8),
+                       ["healthy", "a", "b"])
+    labels.rename_label(1, "alpha")
+    assert labels.label_name_val(1) == "alpha"
+    labels.rename_label("alpha", "beta")
+    assert labels.label_name_val(1) == "beta"
+    with pytest.raises(ValueError):
+        labels.rename_label(0, "x")
+    with pytest.raises(ValueError):
+        labels.rename_label(-1, "x")
+    with pytest.raises(ValueError):
+        labels.rename_label(1, "b")
+    with pytest.raises(ValueError):
+        labels.rename_label("missing", "x")
+    labels.verify_integrity()
+
+
+def test_delete_label():
+    labels = SAMLabels(np.array([0, 1, 2, 1], dtype=np.int8),
+                       ["healthy", "a", "b"])
+    labels.delete_label("a")
+    np.testing.assert_array_equal(labels.labels, np.array([0, -1, 1, -1]))
+    assert labels.label_names == ["healthy", "b"]
+    labels.verify_integrity()
+    with pytest.raises(ValueError):
+        labels.delete_label(0)
+    with pytest.raises(ValueError):
+        labels.delete_label(-1)
+    with pytest.raises(ValueError):
+        labels.delete_label("missing")

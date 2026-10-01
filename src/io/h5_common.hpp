@@ -6,6 +6,7 @@
 #include <H5Cpp.h>
 
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <stdexcept>
@@ -119,6 +120,61 @@ inline void write_bool_attr(H5::Group& group, const std::string& name,
 }
 
 // dataset helpers
+
+// ---- format versioning ----------------------------------------------------
+//
+// Both file formats carry `samcore_format_version` (int64) and an
+// informational `samcore_version` (string) attribute on the file root.
+// Files without the attribute are legacy and treated as version 1; files
+// written by a newer library are rejected on open.
+
+inline constexpr std::int64_t current_format_version = 1;
+inline constexpr const char* format_version_attr = "samcore_format_version";
+inline constexpr const char* library_version_attr = "samcore_version";
+
+// Write the format/library version attributes onto an HDF5 object (file,
+// group or dataset).
+inline void write_format_version(H5::H5Object& obj) {
+    {
+        H5::DataSpace dspace(H5S_SCALAR);
+        H5::Attribute attr = obj.createAttribute(
+            format_version_attr, H5::PredType::NATIVE_INT64, dspace);
+        const std::int64_t v = current_format_version;
+        attr.write(H5::PredType::NATIVE_INT64, &v);
+    }
+    {
+        H5::DataSpace dspace(H5S_SCALAR);
+        H5::StrType stype(H5::PredType::C_S1, H5T_VARIABLE);
+        H5Tset_cset(stype.getId(), H5T_CSET_UTF8);
+        H5::Attribute attr =
+            obj.createAttribute(library_version_attr, stype, dspace);
+        const char* cstr = SAMCORE_VERSION;
+        attr.write(stype, &cstr);
+    }
+}
+
+// Check the format version of an HDF5 object and warn when the file was
+// written by a newer library.  Reading continues: format changes are expected
+// to be additive (new datasets/attributes can be ignored), so a higher
+// version is not by itself a reason to reject the file.
+inline std::int64_t read_format_version(H5::H5Object& obj) {
+    if (!obj.attrExists(format_version_attr)) return -1; // legacy file (v1)
+    H5::Attribute attr = obj.openAttribute(format_version_attr);
+    std::int64_t v = 0;
+    attr.read(H5::PredType::NATIVE_INT64, &v);
+    return v;
+}
+
+inline void warn_if_newer_format(H5::H5Object& obj, const std::string& ctx) {
+    const std::int64_t v = read_format_version(obj);
+    if (v > current_format_version) {
+        std::fprintf(stderr,
+                     "Warning: %s: file format version %lld is newer than the "
+                     "supported version %lld; attempting to read anyway.\n",
+                     ctx.c_str(), static_cast<long long>(v),
+                     static_cast<long long>(current_format_version));
+    }
+}
 
 // Chunk rows so that rows*cols*itemsize is roughly chunk_target bytes.
 [[nodiscard]] inline hsize_t chunk_rows(size_t rows, size_t cols,

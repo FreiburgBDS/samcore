@@ -8,8 +8,12 @@ namespace samcore::preprocessing {
 
 // All functions operate on 2-D signal arrays (n_signals, scanlen) in
 // float32 and are OpenMP-parallel over signals.
+//
+// Frequency parameters (cutoff*, fs) must share one frequency unit; the
+// filters only use their ratio, so Hz or MHz both work as long as they
+// match.  MHz matches sam_header::samplerate.
 
-// 3rd-order Butterworth low-pass filter.  cutoff and fs in Hz.
+// 3rd-order Butterworth low-pass filter.
 [[nodiscard]] array2d<float> lp(const array2d<float>& data, double cutoff,
                                 double fs);
 
@@ -26,7 +30,8 @@ namespace samcore::preprocessing {
                                     size_t window_length = 5,
                                     size_t polyorder = 2);
 
-// 1-D median filter (kernel_size odd, reflect-padded edges).
+// 1-D median filter (kernel_size odd, whole-sample reflect padding;
+// see signal::medfilt1d for the exact edge semantics).
 [[nodiscard]] array2d<float> medfilt(const array2d<float>& data,
                                      size_t kernel_size = 3);
 

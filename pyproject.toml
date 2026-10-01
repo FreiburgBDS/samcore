@@ -26,7 +26,12 @@ authors = [
 ]
 
 [project.optional-dependencies]
-test = ["pytest"]
+# scipy backs the medfilt parity check in the Python suite; the test skips
+# cleanly when it is absent, but CI installs it so the check actually runs.
+# (Format versioning is covered by the C++ suite, so no HDF5 Python binding
+# is needed here.)
+test = ["pytest", "scipy"]
+test-torch = ["torch"]
 
 [tool.scikit-build]
 cmake.source-dir = "."

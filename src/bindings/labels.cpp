@@ -130,6 +130,31 @@ void bind_labels(nb::module_& m) {
              "stays at index 0 of ``label_names``.  Every other value that "
              "appears is remapped to 1, 2, 3, ... in ascending order, carrying "
              "over the corresponding name; names that never occur are dropped.")
+        .def("add_label", &sam_labels::add_label, nb::arg("name"),
+             "Register a new class name and return its label value.\n\n"
+                     "Throws when the name already exists "
+                     "(case-insensitive), is reserved "
+                     "('healthy'/'unlabeled'), or the int8 label space is "
+                     "exhausted.")
+        .def("rename_label",
+             [](sam_labels& l,
+                std::variant<std::int8_t, std::string> label,
+                const std::string& name) {
+                 l.rename_label(std::move(label), name);
+             },
+             nb::arg("label"), nb::arg("name"),
+             nb::sig("def rename_label(self, label: int | str, name: str) -> None"),
+             "Rename a class by value or current name (case-insensitive).\n\n"
+                     "The healthy and unlabeled labels cannot be renamed and "
+                     "duplicate names are rejected.")
+        .def("delete_label",
+             [](sam_labels& l, std::variant<std::int8_t, std::string> label) {
+                 l.delete_label(std::move(label));
+             },
+             nb::arg("label"),
+             nb::sig("def delete_label(self, label: int | str) -> None"),
+             "Delete a class: its pixels become unlabeled and the registry "
+             "is compacted.")
         .def("relabel",
              [](sam_labels& l, nb::dict mapping) {
                  std::map<std::variant<std::int64_t, std::string>,
