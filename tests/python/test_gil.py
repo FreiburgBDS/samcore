@@ -16,26 +16,32 @@ def test_gil_released_during_long_computation():
         SAMHeader(scanspline=1, nlines=n, scanlen=sl, samplerate=100.0,
                   tzero=0, resolution=1.0))
 
-    started = threading.Event()
-    worker_done_at = []
+    stop = threading.Event()
+    ticks = [0]
 
     def worker():
-        started.set()
-        time.sleep(0.01)  # requires the GIL only to append
-        worker_done_at.append(time.perf_counter())
+        # Every iteration needs the GIL, so the worker can only make progress
+        # while the main thread is inside the C++ call (which must release the
+        # GIL).  A busy loop avoids time.sleep, whose wakeup macOS coalesces to
+        # tens of milliseconds and made this test flaky.
+        while not stop.is_set():
+            ticks[0] += 1
 
     thread = threading.Thread(target=worker)
     thread.start()
-    started.wait()
+    time.sleep(0.05)          # let the worker get scheduled at least once
+    before = ticks[0]         # snapshot while the main thread holds the GIL
     t0 = time.perf_counter()
     h.compute_stft(nperseg=256, noverlap=128)
     t1 = time.perf_counter()
+    during = ticks[0] - before
+    stop.set()
     thread.join(timeout=2.0)
 
     assert t1 - t0 > 0.02, (
         f"workload too small ({t1 - t0:.3f} s) to test GIL release")
-    assert worker_done_at, "worker thread never finished"
-    # The worker must have completed *while* the C++ call was running; if
-    # the GIL were held for the whole call it could only finish afterwards.
-    assert worker_done_at[0] < t1, (
-        "worker did not run during compute_stft; the GIL is not released")
+    # The main thread holds the GIL from the `before` snapshot until the C++
+    # call releases it, and again once it returns, so any progress here can
+    # only have happened while the call was running with the GIL released.
+    assert during > 0, (
+        "worker made no progress during compute_stft; the GIL is not released")
