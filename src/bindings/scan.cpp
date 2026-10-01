@@ -635,12 +635,6 @@ void bind_scan(nb::module_& m) {
                      "scanlen/4) are applied to the sample data; existing "
                      "``starts`` advance by the applied shift so absolute "
                      "feature times are preserved.")
-        .def("_aligned_xcorr",
-             [](const sam_scan& s, size_t reference, std::int64_t max_shift) {
-                 return without_gil([&] { return s.aligned_xcorr(reference, max_shift); });
-             },
-             nb::arg("reference") = 0, nb::arg("max_shift") = 0,
-             "Return a copy aligned to the reference (see ``_align_xcorr``).")
         .def("_align_tof",
              [](sam_scan& s, double gate_ns, size_t reference,
                 double start_ns) {
@@ -656,14 +650,6 @@ void bind_scan(nb::module_& m) {
                      "existing ``starts`` advance by the applied integer "
                      "shift (clamped at 0).  Scans without an envelope peak "
                      "in the gate are left unchanged.")
-        .def("_aligned_tof",
-             [](const sam_scan& s, double gate_ns, size_t reference,
-                double start_ns) {
-                 return without_gil([&] { return s.aligned_tof(gate_ns, reference, start_ns); });
-             },
-             nb::arg("gate_ns"), nb::arg("reference") = 0,
-             nb::arg("start_ns") = 0.0,
-             "Return a copy aligned by ToF (see ``_align_tof``).")
         .def("_tof",
              [](sam_scan& s, std::int64_t start, std::int64_t end,
                 bool sub_sample) {

@@ -1147,13 +1147,6 @@ void sam_scan::align_xcorr(size_t reference, std::int64_t max_shift) {
     }
 }
 
-sam_scan sam_scan::aligned_xcorr(size_t reference,
-                                 std::int64_t max_shift) const {
-    sam_scan h = copy();
-    h.align_xcorr(reference, max_shift);
-    return h;
-}
-
 void sam_scan::align_tof(double gate_ns, size_t reference, double start_ns) {
     ensure_loaded();
     if (!(gate_ns > 0.0)) {
@@ -1234,13 +1227,6 @@ void sam_scan::align_tof(double gate_ns, size_t reference, double start_ns) {
             }
         }
     }
-}
-
-sam_scan sam_scan::aligned_tof(double gate_ns, size_t reference,
-                               double start_ns) const {
-    sam_scan h = copy();
-    h.align_tof(gate_ns, reference, start_ns);
-    return h;
 }
 
 signal::stft_result sam_scan::compute_stft(size_t nperseg, size_t noverlap,

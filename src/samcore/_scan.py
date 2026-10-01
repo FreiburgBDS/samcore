@@ -309,27 +309,6 @@ def align_xcorr(self: SAMScan, reference: int = 0,
     return self
 
 
-def aligned_xcorr(self: SAMScan, reference: int = 0,
-                  max_shift: Optional[int] = None) -> SAMScan:
-    """Return a copy aligned to the reference scan.
-
-    Parameters
-    ----------
-    reference : int, optional
-        Flat index of the reference A-scan.  Default 0.
-    max_shift : int or None, optional
-        Maximum absolute lag in samples; None (default) means
-        ``scanlen // 4``.
-
-    Returns
-    -------
-    SAMScan
-        A new, aligned scan.
-    """
-    return self._aligned_xcorr(  # type: ignore[attr-defined]
-        int(reference), 0 if max_shift is None else int(max_shift))
-
-
 def align_tof(self: SAMScan, gate_ns: float, reference: int = 0,
               start_ns: float = 0.0, in_place: bool = True) -> SAMScan:
     """Classic time-of-flight alignment.
@@ -365,28 +344,6 @@ def align_tof(self: SAMScan, gate_ns: float, reference: int = 0,
     self._align_tof(  # type: ignore[attr-defined]
         float(gate_ns), int(reference), float(start_ns))
     return self
-
-
-def aligned_tof(self: SAMScan, gate_ns: float, reference: int = 0,
-                start_ns: float = 0.0) -> SAMScan:
-    """Return a copy aligned by time of flight (see :meth:`align_tof`).
-
-    Parameters
-    ----------
-    gate_ns : float
-        Length of the ToF gate in ns.  Required.
-    reference : int, optional
-        Flat index of the reference A-scan.  Default 0.
-    start_ns : float, optional
-        Gate start offset from ``tzero`` in ns.  Default 0.
-
-    Returns
-    -------
-    SAMScan
-        A new, aligned scan.
-    """
-    return self._aligned_tof(  # type: ignore[attr-defined]
-        float(gate_ns), int(reference), float(start_ns))
 
 
 def tof(self: SAMScan, start: int = 0, end: int = 0,
@@ -632,7 +589,7 @@ def __array__(self: SAMScan, dtype: Any = None,
 # alone then releases everything at interpreter shutdown on every platform.
 _PATCHED = (
     compute_stft, downsample, downsampled, rotate, rotated, mirror, mirrored,
-    zgate, align_manual, align_xcorr, aligned_xcorr, align_tof, aligned_tof,
+    zgate, align_manual, align_xcorr, align_tof,
     tof, thickness, xgate, index_range_select, rectangle_select,
     time_range_select, num_scans, __iter__, __hash__, __array__,
 )
@@ -645,7 +602,6 @@ for _fn in _PATCHED:
     _fn.__annotations__ = _fn.__annotations__
 
 del (_PATCHED, _fn, compute_stft, downsample, downsampled, rotate, rotated,
-     mirror, mirrored, zgate, align_manual, align_xcorr, aligned_xcorr,
-     align_tof, aligned_tof, tof, thickness, xgate, index_range_select,
-     rectangle_select, time_range_select, num_scans, __iter__, __hash__,
-     __array__, SAMScan)
+     mirror, mirrored, zgate, align_manual, align_xcorr, align_tof, tof,
+     thickness, xgate, index_range_select, rectangle_select,
+     time_range_select, num_scans, __iter__, __hash__, __array__, SAMScan)

@@ -278,8 +278,6 @@ public:
     // present, advance by the applied shift (clamped at 0) so absolute
     // feature times are preserved.  The reference row is left unchanged.
     void align_xcorr(size_t reference = 0, std::int64_t max_shift = 0);
-    [[nodiscard]] sam_scan aligned_xcorr(size_t reference = 0,
-                                         std::int64_t max_shift = 0) const;
 
     // Classic ToF alignment: shift every A-scan so the echo picked by its
     // analytic-envelope peak lands at the reference scan's peak.  The ToF
@@ -290,8 +288,6 @@ public:
     // unchanged.  Throws when the reference scan has no peak in the gate.
     void align_tof(double gate_ns, size_t reference = 0,
                    double start_ns = 0.0);
-    [[nodiscard]] sam_scan aligned_tof(double gate_ns, size_t reference = 0,
-                                       double start_ns = 0.0) const;
 
     // spectral
 

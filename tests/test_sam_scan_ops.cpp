@@ -580,7 +580,8 @@ TEST(sam_scan, AlignXcorrAdvancesStarts) {
 TEST(sam_scan, AlignXcorrCopyVariantAndValidation) {
     auto h = make_scan(2, 2, 64);
     auto before = h.copy();
-    auto aligned = h.aligned_xcorr(0, 8);
+    auto aligned = h.copy();
+    aligned.align_xcorr(0, 8);
     EXPECT_EQ(h.data(), before.data()); // original untouched
     EXPECT_EQ(aligned.data().rows(), before.data().rows());
 
@@ -617,7 +618,8 @@ TEST(sam_scan, AlignTofAdvancesStartsAndCopyVariant) {
         std::vector<std::int32_t>{50, 50};
     auto h = sam_scan::from_data(data, header, starts);
 
-    auto aligned = h.aligned_tof(2500.0, 0);
+    auto aligned = h.copy();
+    aligned.align_tof(2500.0, 0);
     EXPECT_EQ(h.data(), data); // original untouched
     ASSERT_TRUE(aligned.starts().has_value());
     EXPECT_EQ((*aligned.starts())[0], 50);

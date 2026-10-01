@@ -110,7 +110,7 @@ def test_align_xcorr_advances_starts_and_copy_variant():
     starts = np.array([100, 100], dtype=np.int32)
     h = SAMScan.handler_from_data(data, _header(1, 2, 200), starts)
 
-    aligned = h.aligned_xcorr(0, 30)
+    aligned = h.align_xcorr(0, 30, in_place=False)
     np.testing.assert_array_equal(h.data, data)  # original untouched
     assert list(aligned.starts) == [100, 109]
 
@@ -135,7 +135,7 @@ def test_align_tof_aligns_echoes_and_advances_starts():
     starts = np.array([50, 50], dtype=np.int32)
     h = SAMScan.handler_from_data(data, _header(1, 2, n), starts)
 
-    aligned = h.aligned_tof(gate_ns=2500.0, reference=0)
+    aligned = h.align_tof(gate_ns=2500.0, reference=0, in_place=False)
     np.testing.assert_array_equal(h.data, data)  # original untouched
     assert list(aligned.starts) == [50, 80]      # delayed echo -> +30 shift
     np.testing.assert_array_equal(aligned.data[1, 40:350],
