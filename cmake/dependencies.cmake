@@ -34,9 +34,14 @@ if(SAMCORE_BUILD_TESTS)
   if(NOT GTest_FOUND)
     message(STATUS "googletest not found, fetching via FetchContent")
     include(FetchContent)
+
+    # Silence CMP0135 warnings on CMake 3.24+ while maintaining 3.22 compatibility
+    if(POLICY CMP0135)
+      cmake_policy(SET CMP0135 NEW)
+    endif()
+
     FetchContent_Declare(googletest
       URL https://github.com/google/googletest/releases/download/v1.18.0/googletest-1.18.0.tar.gz
-      DOWNLOAD_EXTRACT_TIMESTAMP TRUE
     )
     set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
     FetchContent_MakeAvailable(googletest)
