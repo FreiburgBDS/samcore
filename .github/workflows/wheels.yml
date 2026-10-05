@@ -52,7 +52,7 @@ jobs:
       - name: Build wheels
         run: python -m cibuildwheel --output-dir wheelhouse
         env:
-          CIBW_BUILD: cp39-* cp310-* cp311-* cp312-* cp313-* cp314-*
+          CIBW_BUILD: cp311-* cp312-* cp313-* cp314-*
           CIBW_ARCHS_LINUX: auto
           CIBW_ARCHS_MACOS: auto
           # 64-bit only: the LLVM clang GNU driver cannot target 32-bit
