@@ -61,7 +61,7 @@ def preprocess(self: SAMDataset, strategy: str, **kwargs: object) -> SAMDataset:
         Forwarded to the strategy:
 
         - ``'lp'``: ``cutoff`` (float), ``fs`` (float); both in the same
-          frequency unit (MHz to match ``header.samplerate``)
+          frequency unit — use MHz to match ``header.samplerate``
         - ``'bp'``: ``cutoff_low`` (float), ``cutoff_high`` (float),
           ``fs`` (float); same frequency unit
         - ``'normalize'``: ``mode`` (str, default ``'minmax'``, one of

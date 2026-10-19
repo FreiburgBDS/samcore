@@ -461,6 +461,24 @@ TEST(sam_scan, SpectralMethods) {
     EXPECT_EQ(s.sxx.size0(), 4);
     EXPECT_EQ(s.sxx.size1(), 129);
     EXPECT_EQ(s.sxx.size2(), 14);
+    // The spectrogram shares the STFT time-origin rule (tzero + centre).
+    ASSERT_EQ(s.t.size(), st.t.size());
+    EXPECT_NEAR(s.t[0], st.t[0], 1e-9);
+    EXPECT_NEAR(s.t[0], 1000.0e-9 + 128.0 / 100.0e6, 1e-9);
+
+    // absolute=false reports window-relative frame centres.
+    auto rel = h.compute_stft(256, 128, 0.0, 0.0, false);
+    auto rel_spec = h.power_spectrogram(256, 128, 0.0, 0.0, false);
+    EXPECT_NEAR(rel.t[0], 128.0 / 100.0e6, 1e-9);
+    EXPECT_NEAR(rel_spec.t[0], rel.t[0], 1e-9);
+    EXPECT_NEAR(rel.t[0], st.t[0] - 1000.0e-9, 1e-9);
+
+    auto pt = h.stft_peak_time(256, 128);
+    ASSERT_EQ(pt.rows(), 2u);
+    EXPECT_GE(pt[0][0], 1000.0e-9f);
+    auto pt_rel = h.stft_peak_time(256, 128, 0.0, 0.0, false);
+    EXPECT_GE(pt_rel[0][0], 0.0f);
+    EXPECT_LT(pt_rel[0][0], pt[0][0]);
 
     EXPECT_THROW((void)h.compute_stft(3000, 128), std::invalid_argument);
 }

@@ -1235,16 +1235,30 @@ void sam_scan::align_tof(double gate_ns, size_t reference, double start_ns,
     align_manual(offsets, gate_len);
 }
 
+namespace {
+
+// Origin of the handler's time axis in seconds.  The STFT family has one
+// shared frame-time array for all A-scans, so gated per-scan starts cannot be
+// represented here; absolute times are therefore anchored at tzero, i.e.
+// time()[0].
+double stft_time_origin(const sam_scan& s) {
+    const auto ts = s.time();
+    return ts.empty() ? 0.0 : ts.front() * 1e-9;
+}
+
+} // namespace
+
 signal::stft_result sam_scan::compute_stft(size_t nperseg, size_t noverlap,
-                                           double f_min, double f_max) const {
+                                           double f_min, double f_max,
+                                           bool absolute) const {
     ensure_loaded();
     const array2d<float> fdata = to_float(data_);
     const double fs = samplerate() * 1e6;
     auto res = signal::stft(fdata, fs, nperseg, noverlap, f_min, f_max);
-    // Align to the handler time scale: t_aligned = t + timescale[0] * 1e-9
-    const auto ts = time();
-    const double offset = (ts.empty() ? 0.0 : ts[0]) * 1e-9;
-    for (auto& t : res.t) t += static_cast<float>(offset);
+    if (absolute) {
+        const double offset = stft_time_origin(*this);
+        for (auto& t : res.t) t += static_cast<float>(offset);
+    }
     return res;
 }
 
@@ -1257,11 +1271,17 @@ signal::psd_result sam_scan::psd(size_t nperseg, size_t noverlap,
 }
 
 signal::spectrogram_result sam_scan::power_spectrogram(
-    size_t nperseg, size_t noverlap, double f_min, double f_max) const {
+    size_t nperseg, size_t noverlap, double f_min, double f_max,
+    bool absolute) const {
     ensure_loaded();
     const array2d<float> fdata = to_float(data_);
-    return signal::spectrogram_psd(fdata, samplerate() * 1e6, nperseg,
-                                   noverlap, f_min, f_max);
+    auto res = signal::spectrogram_psd(fdata, samplerate() * 1e6, nperseg,
+                                       noverlap, f_min, f_max);
+    if (absolute) {
+        const double offset = stft_time_origin(*this);
+        for (auto& t : res.t) t += static_cast<float>(offset);
+    }
+    return res;
 }
 
 array2d<float> sam_scan::stft_peak_frequency(size_t nperseg, size_t noverlap,
@@ -1275,17 +1295,18 @@ array2d<float> sam_scan::stft_peak_frequency(size_t nperseg, size_t noverlap,
 }
 
 array2d<float> sam_scan::stft_peak_time(size_t nperseg, size_t noverlap,
-                                        double f_min, double f_max) const {
+                                        double f_min, double f_max,
+                                        bool absolute) const {
     ensure_loaded();
     const array2d<float> fdata = to_float(data_);
     const auto res = signal::stft_peaks(fdata, samplerate() * 1e6, nperseg,
                                         noverlap, f_min, f_max);
-    // Align to the handler time scale like compute_stft().
-    const auto ts = time();
-    const double offset = (ts.empty() ? 0.0 : ts[0]) * 1e-9;
-    std::vector<float> aligned = res.peak_time;
-    for (auto& t : aligned) t += static_cast<float>(offset);
-    return reshape_signals(aligned, static_cast<size_t>(nlines()),
+    std::vector<float> times = res.peak_time;
+    if (absolute) {
+        const double offset = stft_time_origin(*this);
+        for (auto& t : times) t += static_cast<float>(offset);
+    }
+    return reshape_signals(times, static_cast<size_t>(nlines()),
                            static_cast<size_t>(cols()));
 }
 

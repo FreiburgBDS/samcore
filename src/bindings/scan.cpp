@@ -758,9 +758,10 @@ void bind_scan(nb::module_& m) {
                      "pick failed).")
         .def("_compute_stft",
              [](sam_scan& s, size_t nperseg, size_t noverlap, double f_min,
-                double f_max) {
+                double f_max, bool absolute) {
                  signal::stft_result r = without_gil([&] {
-                     return s.compute_stft(nperseg, noverlap, f_min, f_max);
+                     return s.compute_stft(nperseg, noverlap, f_min, f_max,
+                                           absolute);
                  });
                  return nb::make_tuple(to_numpy(std::move(r.f)),
                                        to_numpy(std::move(r.t)),
@@ -768,8 +769,9 @@ void bind_scan(nb::module_& m) {
              },
              nb::arg("nperseg") = 256, nb::arg("noverlap") = 128,
              nb::arg("f_min") = 0.0, nb::arg("f_max") = 0.0,
+             nb::arg("absolute") = true,
              nb::sig(
-                 "def _compute_stft(self, nperseg: int = 256, noverlap: int = 128, f_min: float = 0.0, f_max: float = 0.0) -> tuple[numpy.typing.NDArray[numpy.float32], numpy.typing.NDArray[numpy.float32], numpy.typing.NDArray[numpy.complex64]]"),
+                 "def _compute_stft(self, nperseg: int = 256, noverlap: int = 128, f_min: float = 0.0, f_max: float = 0.0, absolute: bool = True) -> tuple[numpy.typing.NDArray[numpy.float32], numpy.typing.NDArray[numpy.float32], numpy.typing.NDArray[numpy.complex64]]"),
              "Compute the one-sided Short-Time Fourier Transform (STFT) of "
                      "every A-scan.\n\n"
                      "SAM data is real-valued, so only positive-frequency "
@@ -783,12 +785,20 @@ void bind_scan(nb::module_& m) {
                      "noverlap : int, optional\n"
                      "    Samples of overlap between segments.\n"
                      "f_min, f_max : float, optional\n"
-                     "    Frequency band limits in Hz.\n\n"
+                     "    Frequency band limits in Hz.\n"
+                     "absolute : bool, optional\n"
+                     "    If True (default), times are on the handler's time "
+                     "scale (``time()[0]`` + frame centre).  If False, times "
+                     "are relative to the start of the recorded window "
+                     "(``nperseg / 2 / fs``).  The frame axis is shared by "
+                     "all A-scans, so per-scan gated starts are not folded "
+                     "in; the absolute origin is always ``time()[0]`` "
+                     "(tzero).\n\n"
                      "Returns\n"
                      "-------\n"
                      "(freqs, time, zxx) : tuple of ndarray\n"
-                     "    Frequency bins in Hz (n_freqs,), time bins in "
-                     "seconds (n_frames,) and the complex STFT of shape "
+                     "    Frequency bins in Hz (n_freqs,), frame-centre times "
+                     "in seconds (n_frames,) and the complex STFT of shape "
                      "(n_signals, n_freqs, n_frames).")
         .def("psd",
              [](sam_scan& s, size_t nperseg, size_t noverlap, double f_min,
@@ -821,10 +831,10 @@ void bind_scan(nb::module_& m) {
                      "(n_signals, n_freqs).")
         .def("power_spectrogram",
              [](sam_scan& s, size_t nperseg, size_t noverlap, double f_min,
-                double f_max) {
+                double f_max, bool absolute) {
                  signal::spectrogram_result r = without_gil([&] {
                      return s.power_spectrogram(nperseg, noverlap, f_min,
-                                                f_max);
+                                                f_max, absolute);
                  });
                  return nb::make_tuple(to_numpy(std::move(r.f)),
                                        to_numpy(std::move(r.t)),
@@ -832,8 +842,9 @@ void bind_scan(nb::module_& m) {
              },
              nb::arg("nperseg") = 256, nb::arg("noverlap") = 128,
              nb::arg("f_min") = 0.0, nb::arg("f_max") = 0.0,
+             nb::arg("absolute") = true,
              nb::sig(
-                 "def power_spectrogram(self, nperseg: int = 256, noverlap: int = 128, f_min: float = 0.0, f_max: float = 0.0) -> tuple[numpy.typing.NDArray[numpy.float32], numpy.typing.NDArray[numpy.float32], numpy.typing.NDArray[numpy.float32]]"),
+                 "def power_spectrogram(self, nperseg: int = 256, noverlap: int = 128, f_min: float = 0.0, f_max: float = 0.0, absolute: bool = True) -> tuple[numpy.typing.NDArray[numpy.float32], numpy.typing.NDArray[numpy.float32], numpy.typing.NDArray[numpy.float32]]"),
              "Compute the power spectrogram of every A-scan.\n\n"
                      "Uses the same window and segment parameters as the "
                      "STFT.  With ``f_max > 0`` only bins in "
@@ -846,13 +857,21 @@ void bind_scan(nb::module_& m) {
                      "noverlap : int, optional\n"
                      "    Samples of overlap between segments.\n"
                      "f_min, f_max : float, optional\n"
-                     "    Frequency band limits in Hz.\n\n"
+                     "    Frequency band limits in Hz.\n"
+                     "absolute : bool, optional\n"
+                     "    If True (default), times are on the handler's time "
+                     "scale (``time()[0]`` + frame centre), matching "
+                     "``compute_stft``.  If False, times are relative to the "
+                     "start of the recorded window (``nperseg / 2 / fs``).  "
+                     "As for ``compute_stft``, per-scan gated starts are not "
+                     "folded in; the absolute origin is ``time()[0]`` "
+                     "(tzero).\n\n"
                      "Returns\n"
                      "-------\n"
                      "(freqs, time, sxx) : tuple of ndarray\n"
-                     "    Frequency bins in Hz (n_freqs,), time bins in "
-                     "seconds (n_frames,) and the power spectrogram of shape "
-                     "(n_signals, n_freqs, n_frames).")
+                     "    Frequency bins in Hz (n_freqs,), frame-centre times "
+                     "in seconds (n_frames,) and the power spectrogram of "
+                     "shape (n_signals, n_freqs, n_frames).")
         .def("stft_peak_frequency",
              [](sam_scan& s, size_t nperseg, size_t noverlap, double f_min,
                 double f_max) {
@@ -872,20 +891,27 @@ void bind_scan(nb::module_& m) {
                      "limited with ``f_min``/``f_max``.")
         .def("stft_peak_time",
              [](sam_scan& s, size_t nperseg, size_t noverlap, double f_min,
-                double f_max) {
+                double f_max, bool absolute) {
                  return to_numpy(without_gil([&] {
-                     return s.stft_peak_time(nperseg, noverlap, f_min, f_max);
+                     return s.stft_peak_time(nperseg, noverlap, f_min, f_max,
+                                             absolute);
                  }));
              },
              nb::arg("nperseg") = 256, nb::arg("noverlap") = 128,
              nb::arg("f_min") = 0.0, nb::arg("f_max") = 0.0,
+             nb::arg("absolute") = true,
              nb::sig(
-                 "def stft_peak_time(self, nperseg: int = 256, noverlap: int = 128, f_min: float = 0.0, f_max: float = 0.0) -> numpy.typing.NDArray[numpy.float32]"),
+                 "def stft_peak_time(self, nperseg: int = 256, noverlap: int = 128, f_min: float = 0.0, f_max: float = 0.0, absolute: bool = True) -> numpy.typing.NDArray[numpy.float32]"),
              "Peak STFT time per A-scan (seconds), reshaped to "
                      "(nlines, cols).\n\n"
                      "For every scan the frame with the largest "
                      "max-over-frequencies magnitude is selected; the band "
-                     "can be limited with ``f_min``/``f_max``.")
+                     "can be limited with ``f_min``/``f_max``.  Times follow "
+                     "the same ``absolute`` convention as ``compute_stft``: "
+                     "True (default) uses the handler time scale, False is "
+                     "relative to the start of the recorded window.  The "
+                     "axis is shared by all A-scans, so per-scan gated "
+                     "starts are not folded in.")
         .def("spectrum",
              [](const sam_scan& s) {
                  signal::spectrum_result r =
