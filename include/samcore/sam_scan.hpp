@@ -300,13 +300,19 @@ public:
 
     // spectral
 
-    // One-sided STFT of every scan (fs = samplerate in Hz); t aligned to
-    // the handler's time scale in seconds.  With f_max > 0 only bins in
-    // [f_min, f_max] Hz are returned (f_max = 0 means Nyquist).
+    // One-sided STFT of every scan (fs = samplerate in Hz).  With f_max > 0
+    // only bins in [f_min, f_max] Hz are returned (f_max = 0 means Nyquist).
+    // `t` holds frame centres in seconds: absolute=true reports them on the
+    // handler's time scale (tzero + frame centre, via time()[0]); false
+    // reports them relative to the start of the recorded window
+    // (nperseg / 2 / fs).  The frame axis is shared by all A-scans, so
+    // per-scan gated starts are not folded in; the absolute origin is
+    // time()[0] (tzero).
     [[nodiscard]] signal::stft_result compute_stft(size_t nperseg = 256,
                                                    size_t noverlap = 128,
                                                    double f_min = 0.0,
-                                                   double f_max = 0.0) const;
+                                                   double f_max = 0.0,
+                                                   bool absolute = true) const;
     // Welch PSD (scipy.signal.welch, detrend=False); f in Hz, f_min/f_max
     // in Hz.
     [[nodiscard]] signal::psd_result psd(size_t nperseg = 256,
@@ -314,20 +320,21 @@ public:
                                          double f_min = 0.0,
                                          double f_max = 0.0) const;
     // Per-frame power spectral density (hann window, density scaling);
-    // f in Hz, t in seconds, f_min/f_max in Hz.
+    // f in Hz, t in seconds, f_min/f_max in Hz.  The `t` convention matches
+    // compute_stft() for the same `absolute` value.
     [[nodiscard]] signal::spectrogram_result power_spectrogram(
         size_t nperseg = 256, size_t noverlap = 128, double f_min = 0.0,
-        double f_max = 0.0) const;
+        double f_max = 0.0, bool absolute = true) const;
     // Per-scan STFT magnitude peaks: the frequency (Hz) of the strongest
     // max-over-frames bin and the time (seconds) of the strongest
     // max-over-frequencies frame, reshaped to (nlines, cols).  Band-limited
-    // like compute_stft().
+    // like compute_stft(); the peak time follows the same `absolute` rule.
     [[nodiscard]] array2d<float> stft_peak_frequency(
         size_t nperseg = 256, size_t noverlap = 128, double f_min = 0.0,
         double f_max = 0.0) const;
     [[nodiscard]] array2d<float> stft_peak_time(
         size_t nperseg = 256, size_t noverlap = 128, double f_min = 0.0,
-        double f_max = 0.0) const;
+        double f_max = 0.0, bool absolute = true) const;
     // One-sided FFT magnitude of every A-scan (numpy rfft parity); the
     // frequencies are in Hz.
     [[nodiscard]] signal::spectrum_result spectrum() const;

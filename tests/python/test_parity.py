@@ -235,6 +235,48 @@ def test_stft_psd_spectrogram():
         h.compute_stft(h.scanlen + 1, 64)
 
 
+def test_stft_time_origin_absolute_and_relative():
+    """The whole STFT family shares one documented time-origin rule.
+
+    Regression for power_spectrogram() ignoring tzero: with a non-zero tzero
+    all absolute frame times must agree with compute_stft() and start at
+    tzero + nperseg / 2 / fs.  absolute=False exposes the window-relative
+    frame centres instead.
+    """
+    fs = 208.0e6
+    n = 800
+    tzero = 28943  # ns; non-zero is the whole point of the regression
+    header = SAMHeader(scanspline=1, nlines=2, scanlen=n,
+                       samplerate=fs / 1e6, tzero=tzero, resolution=1.0)
+    data = np.random.default_rng(7).integers(
+        -128, 127, size=(2, n)).astype(np.int8)
+    h = SAMScan.handler_from_data(data, header)
+
+    nperseg, noverlap = 256, 128
+    frame_centre = nperseg / 2 / fs
+    origin = h.time()[0] * 1e-9
+
+    _, t_stft, _ = h.compute_stft(nperseg, noverlap)
+    _, t_spec, _ = h.power_spectrogram(nperseg, noverlap)
+    peak = h.stft_peak_time(nperseg, noverlap)
+
+    # Absolute: tzero + frame centre, identical across the STFT family.
+    np.testing.assert_allclose(t_stft, t_spec)
+    np.testing.assert_allclose(t_stft[0], origin + frame_centre,
+                               rtol=1e-6, atol=1e-12)
+    assert peak.min() >= origin
+
+    # Relative: window-relative frame centres.
+    _, t_rel, _ = h.compute_stft(nperseg, noverlap, absolute=False)
+    _, t_rel_spec, _ = h.power_spectrogram(nperseg, noverlap, absolute=False)
+    peak_rel = h.stft_peak_time(nperseg, noverlap, absolute=False)
+    np.testing.assert_allclose(t_rel, t_rel_spec)
+    np.testing.assert_allclose(t_rel, t_stft - origin, rtol=1e-6, atol=1e-12)
+    np.testing.assert_allclose(t_rel[0], frame_centre, rtol=1e-6, atol=1e-12)
+    assert peak_rel.min() >= 0.0
+    assert peak_rel.min() < peak.min()
+
+
 @needs_data
 def test_labels_api():
     h = SAMScan(H5)

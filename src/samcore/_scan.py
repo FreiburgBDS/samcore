@@ -24,7 +24,7 @@ _STFT = Tuple[NDArray[np.float32], NDArray[np.float32], NDArray[np.complex64]]
 
 def compute_stft(self: SAMScan, nperseg: int = 256,
                  noverlap: int = 128, f_min: float = 0.0,
-                 f_max: float = 0.0) -> _STFT:
+                 f_max: float = 0.0, absolute: bool = True) -> _STFT:
     """Compute the one-sided Short-Time Fourier Transform (STFT) of every A-scan.
 
     SAM data is real-valued and single-channel, so a one-sided (real) STFT
@@ -39,13 +39,21 @@ def compute_stft(self: SAMScan, nperseg: int = 256,
     f_min, f_max : float
         Frequency band limits in Hz.  With ``f_max > 0`` only bins in
         ``[f_min, f_max]`` are returned; ``f_max = 0`` means Nyquist.
+    absolute : bool, optional
+        If True (default), ``t`` holds frame centres on the handler's time
+        scale (``time()[0]`` + frame centre).  If False, ``t`` holds frame
+        centres relative to the start of the recorded window
+        (``nperseg / 2 / fs``).  The same convention also applies to
+        :meth:`power_spectrogram` and :meth:`stft_peak_time`.  The frame
+        axis is shared by all A-scans, so per-scan gated starts are not
+        folded in; the absolute origin is always ``time()[0]`` (tzero).
 
     Returns
     -------
     f : ndarray (float32)
         Frequency bins, shape (n_freqs,).
     t : ndarray (float32)
-        Time bins in seconds, shape (n_frames,).
+        Frame-centre times in seconds, shape (n_frames,).
     Zxx : ndarray (complex64)
         The STFT of shape (n_signals, n_freqs, n_frames).
 
@@ -57,7 +65,8 @@ def compute_stft(self: SAMScan, nperseg: int = 256,
     if self.data.shape[1] < nperseg:
         raise ValueError(
             "nperseg cannot be greater than the length of the signals.")
-    return self._compute_stft(nperseg, noverlap, float(f_min), float(f_max))  # type: ignore[attr-defined]
+    return self._compute_stft(nperseg, noverlap, float(f_min), float(f_max),  # type: ignore[attr-defined]
+                              absolute)
 
 
 def downsample(self: SAMScan, factor: int, mode: str = "decimate",

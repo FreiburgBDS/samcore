@@ -14,7 +14,7 @@ Typical workflow::
 
     scan = samcore.SAMScan("data.h5sam")
     dataset = samcore.SAMDataset([scan])
-    dataset.preprocess("lp", cutoff=10.0, fs=2.5e3)
+    dataset.preprocess("lp", cutoff=10.0, fs=625.0)
     dataset.train_test_split(test_size=0.2)
     for X, y, spatial in dataset.batches(batch_size=64):
         ...

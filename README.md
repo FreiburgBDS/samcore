@@ -115,7 +115,7 @@ cscan = scan.image("absmax")
 
 # Pool one or more cubes into a padded, label-aware dataset
 dataset = samcore.SAMDataset([scan])
-dataset.preprocess("lp", cutoff=10.0, fs=2.5e3)   # cutoff/fs in MHz
+dataset.preprocess("lp", cutoff=10.0, fs=625.0)   # MHz
 dataset.train_test_split(test_size=0.2, random_state=0)
 
 for X, y, spatial in dataset.batches(batch_size=64):
@@ -155,8 +155,8 @@ int main() {
 
     samcore::sam_dataset dataset({scan});
     samcore::preprocess_args args;
-    args.cutoff = 10.0;   // MHz (same unit as samplerate)
-    args.fs = 2.5e3;      // MHz
+    args.cutoff = 10.0;   // MHz
+    args.fs = 625.0;      // MHz
     dataset.preprocess("lp", args);
 
     dataset.save("cells.h5samd");

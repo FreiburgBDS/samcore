@@ -184,14 +184,14 @@ class TestPreprocess:
     def test_lp(self, single_handler):
         handlers = single_handler
         ds = SAMDataset(handlers)
-        ds.preprocess("lp", cutoff=1e6, fs=25e6)
+        ds.preprocess("lp", cutoff=1.0, fs=25.0)  # MHz
         assert ds.X.shape == (20, 100)
         assert ds.X.dtype == np.float32
 
     def test_bp(self, single_handler):
         handlers = single_handler
         ds = SAMDataset(handlers)
-        ds.preprocess("bp", cutoff_low=5e4, cutoff_high=5e5, fs=25e6)
+        ds.preprocess("bp", cutoff_low=0.05, cutoff_high=0.5, fs=25.0)  # MHz
         assert ds.X.shape == (20, 100)
 
     def test_normalize_max(self, single_handler):
