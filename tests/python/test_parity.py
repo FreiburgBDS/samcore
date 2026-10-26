@@ -471,6 +471,11 @@ def test_preprocessing_module():
     assert samcore.preprocessing.gate(data, 10, 100).shape == (8, 90)
     assert samcore.preprocessing.detrend(data).shape == data.shape
     assert samcore.preprocessing.envelope(data).shape == data.shape
+    assert samcore.preprocessing.analytic(data).shape == data.shape
+    assert samcore.preprocessing.analytic(data).dtype == np.complex64
+    mean, var = samcore.preprocessing.phase_stats(data)
+    assert mean.shape == (8,)
+    assert var.shape == (8,)
     assert samcore.preprocessing.moving_average(data, 5).shape == data.shape
     with pytest.raises(ValueError):
         samcore.preprocessing.normalize(data, "bogus")

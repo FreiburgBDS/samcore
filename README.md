@@ -23,7 +23,9 @@ C-scan images, spectra and ready-to-train machine-learning datasets.
   (`scan.image("max" | "absmax" | "power")`) and normalize the raw int8
   signals to `[-1, 1)` (`scan.normalized_data()`).
 - **Signal processing**: built-in strategies `lp`, `bp`, `normalize`,
-  `savgol`, `medfilt`, `gate`, `detrend`, `envelope` and `moving_average`.
+  `savgol`, `medfilt`, `gate`, `detrend`, `envelope`, `analytic` and
+  `moving_average`, plus circular phase statistics (`phase_stats`) derived
+  from the Hilbert analytic signal.
 - **Spectral analysis**: one-sided STFT, Welch PSD and per-frame power
   spectrograms of every A-scan, with optional `f_min`/`f_max` band limits;
   batched `scan.spectrum()` FFT magnitudes and `stft_peak_frequency()` /

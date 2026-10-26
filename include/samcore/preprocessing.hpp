@@ -2,7 +2,10 @@
 
 #include <samcore/array.hpp>
 
+#include <complex>
 #include <string>
+#include <utility>
+#include <vector>
 
 namespace samcore::preprocessing {
 
@@ -45,6 +48,32 @@ namespace samcore::preprocessing {
 
 // Hilbert-transform envelope magnitude of each signal.
 [[nodiscard]] array2d<float> envelope(const array2d<float>& data);
+
+// Analytic signal of each signal: z = x + i*H{x} (scipy.signal.hilbert
+// parity), returned as complex64.  envelope(data) == abs(analytic(data))
+// and the per-sample phase is arg(analytic(data)).
+[[nodiscard]] array2d<std::complex<float>> analytic(const array2d<float>& data);
+
+// Circular statistics of the instantaneous phase of each signal.
+//
+// For every signal, phase = arg(analytic(signal)) and
+//
+//     mean_sin = mean(sin(phase))
+//     mean_cos = mean(cos(phase))
+//     phase_mean = atan2(mean_sin, mean_cos)
+//     phase_var  = 1 - hypot(mean_sin, mean_cos)
+//
+// phase_mean is the circular mean direction in radians; phase_var in [0, 1]
+// measures the spread of the phases (0 = all equal, 1 = uniformly spread).
+//
+// Degenerate cases: a silent (all-zero) signal yields phase 0 at every
+// sample (consistent with arg(0) = 0), hence phase_mean 0 and phase_var 0.
+// If the phases cancel so that the resultant length
+// hypot(mean_sin, mean_cos) is numerically zero (< 1e-12), the mean
+// direction is undefined; phase_mean is then 0 and phase_var is 1.
+// Returns {phase_mean, phase_var}, each of length data.rows().
+[[nodiscard]] std::pair<std::vector<double>, std::vector<double>> phase_stats(
+    const array2d<float>& data);
 
 // Boxcar moving average, mode='same' convolution semantics.
 [[nodiscard]] array2d<float> moving_average(const array2d<float>& data,
