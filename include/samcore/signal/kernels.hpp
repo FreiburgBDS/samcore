@@ -132,6 +132,11 @@ butter_bandpass(double cutoff_low, double cutoff_high, double fs);
 
 // FIR / nonlinear
 
+// Analytic signal via FFT (scipy.signal.hilbert parity), z = x + i*H{x}.
+// For an all-zero signal the result is all zeros.
+[[nodiscard]] std::vector<std::complex<double>> hilbert_analytic(
+    std::span<const double> x);
+
 // Analytic-signal magnitude via FFT (scipy.signal.hilbert parity).
 [[nodiscard]] std::vector<double> hilbert_envelope(std::span<const double> x);
 

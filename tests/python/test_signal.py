@@ -194,6 +194,110 @@ class TestSpectralEnergyRatio:
         assert np.isfinite(out[1])
 
 
+def _analytic_1d(x):
+    """scipy.signal.hilbert reference: keep DC/Nyquist, double the rest."""
+    n = x.size
+    h = np.zeros(n)
+    if n % 2 == 0:
+        h[0] = 1.0
+        h[n // 2] = 1.0
+        h[1:n // 2] = 2.0
+    else:
+        h[0] = 1.0
+        h[1:(n + 1) // 2] = 2.0
+    return np.fft.ifft(np.fft.fft(x) * h)
+
+
+class TestAnalytic:
+    def test_matches_reference(self):
+        rng = np.random.default_rng(6)
+        data = rng.standard_normal((5, 128)).astype(np.float32)
+        got = preprocessing.analytic(data)
+        assert got.shape == data.shape
+        assert got.dtype == np.complex64
+        ref = np.stack([_analytic_1d(row.astype(np.float64)) for row in data])
+        np.testing.assert_allclose(got, ref, atol=1e-5)
+
+    def test_odd_length_matches_reference(self):
+        rng = np.random.default_rng(7)
+        data = rng.standard_normal((3, 129)).astype(np.float32)
+        got = preprocessing.analytic(data)
+        ref = np.stack([_analytic_1d(row.astype(np.float64)) for row in data])
+        np.testing.assert_allclose(got, ref, atol=1e-5)
+
+    def test_envelope_is_abs(self):
+        rng = np.random.default_rng(8)
+        data = rng.standard_normal((4, 100)).astype(np.float32)
+        np.testing.assert_allclose(preprocessing.envelope(data),
+                                   np.abs(preprocessing.analytic(data)),
+                                   atol=1e-6)
+
+    def test_single_sample_keeps_dc(self):
+        got = preprocessing.analytic(np.array([[5.0]], dtype=np.float32))
+        np.testing.assert_allclose(got, np.array([[5.0 + 0.0j]]))
+
+    def test_negative_constant_is_real(self):
+        data = np.full((1, 32), -2.0, dtype=np.float32)
+        got = preprocessing.analytic(data)
+        np.testing.assert_allclose(got.real, -2.0, atol=1e-5)
+        np.testing.assert_allclose(got.imag, 0.0, atol=1e-5)
+
+
+class TestPhaseStats:
+    def test_matches_reference(self):
+        rng = np.random.default_rng(9)
+        data = rng.standard_normal((4, 128)).astype(np.float32)
+        mean, var = preprocessing.phase_stats(data)
+        assert mean.shape == (4,)
+        assert var.shape == (4,)
+        assert mean.dtype == np.float64
+        assert var.dtype == np.float64
+        for i, row in enumerate(data):
+            phase = np.angle(_analytic_1d(row.astype(np.float64)))
+            mean_sin = np.mean(np.sin(phase))
+            mean_cos = np.mean(np.cos(phase))
+            np.testing.assert_allclose(
+                mean[i], np.arctan2(mean_sin, mean_cos), atol=1e-9)
+            np.testing.assert_allclose(
+                var[i], 1.0 - np.hypot(mean_sin, mean_cos), atol=1e-9)
+            assert 0.0 <= var[i] <= 1.0
+
+    def test_silent_row(self):
+        data = np.zeros((2, 64), dtype=np.float32)
+        data[1] = np.arange(64, dtype=np.float32)
+        with np.errstate(all="raise"):
+            mean, var = preprocessing.phase_stats(data)
+        assert mean[0] == 0.0
+        assert var[0] == 0.0
+        assert np.isfinite(mean[1])
+        assert np.isfinite(var[1])
+
+    def test_negative_constant_has_pi_phase(self):
+        data = np.full((1, 64), -3.0, dtype=np.float32)
+        mean, var = preprocessing.phase_stats(data)
+        assert np.isclose(abs(mean[0]), np.pi)
+        assert np.isclose(var[0], 0.0)
+
+    def test_undefined_mean(self):
+        # Analytic phases 0 and pi cancel (up to rounding) in the circular
+        # mean, so the mean direction is reported as undefined.
+        data = np.array([[1.0, -1.0]], dtype=np.float32)
+        mean, var = preprocessing.phase_stats(data)
+        assert mean[0] == 0.0
+        assert var[0] == 1.0
+
+    def test_full_cycle_is_spread(self):
+        n = 128
+        data = np.cos(2.0 * np.pi * 8.0 * np.arange(n) / n)[None, :]
+        mean, var = preprocessing.phase_stats(data.astype(np.float32))
+        assert np.isclose(var[0], 1.0, atol=1e-6)
+        assert np.isfinite(mean[0])
+
+    def test_empty_rows_raise(self):
+        with np.testing.assert_raises(ValueError):
+            preprocessing.phase_stats(np.empty((2, 0), dtype=np.float32))
+
+
 def test_fft_spectrum_matches_numpy():
     rng = np.random.default_rng(0)
     data = rng.standard_normal((4, 128)).astype(np.float32)

@@ -416,7 +416,8 @@ spectrum_result fft_spectrum(const array2d<float>& data, double d) {
     return result;
 }
 
-std::vector<double> hilbert_envelope(std::span<const double> x) {
+std::vector<std::complex<double>> hilbert_analytic(
+    std::span<const double> x) {
     const size_t n = x.size();
     if (n == 0) return {};
     // One-sided spectrum, then the analytic signal (scipy.signal.hilbert):
@@ -428,8 +429,9 @@ std::vector<double> hilbert_envelope(std::span<const double> x) {
     for (size_t k = 1; k < n / 2; ++k) analytic_spec[k] = 2.0 * X[k];
     if (n % 2 == 0) {
         analytic_spec[n / 2] = X[n / 2];
-    } else {
-        // n odd: double the Nyquist-adjacent bin too (no Nyquist bin).
+    } else if (n > 1) {
+        // n odd: double the Nyquist-adjacent bin too (no Nyquist bin).  For
+        // n == 1 that bin is the DC bin, which must stay unscaled.
         analytic_spec[n / 2] = 2.0 * X[n / 2];
     }
     const shape_t shape{n};
@@ -438,8 +440,15 @@ std::vector<double> hilbert_envelope(std::span<const double> x) {
     pocketfft::c2c(shape, strides, strides, shape_t{0}, false,
                    analytic_spec.data(), analytic.data(),
                    1.0 / static_cast<double>(n));
-    std::vector<double> env(n);
-    for (size_t k = 0; k < n; ++k) env[k] = std::abs(analytic[k]);
+    return analytic;
+}
+
+std::vector<double> hilbert_envelope(std::span<const double> x) {
+    const auto analytic = hilbert_analytic(x);
+    std::vector<double> env(analytic.size());
+    for (size_t k = 0; k < analytic.size(); ++k) {
+        env[k] = std::abs(analytic[k]);
+    }
     return env;
 }
 

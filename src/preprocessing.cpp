@@ -20,6 +20,10 @@ void validate_rows(const array2d<float>& data) {
     }
 }
 
+// Resultant length below which the circular mean direction is treated as
+// undefined because the phase vectors cancel.
+constexpr double kCircularMeanEps = 1e-12;
+
 // scipy.signal.savgol_filter mode='interp': convolution with 'constant'
 // (zero) padding, then refit the edges with a least-squares polynomial.
 array2d<float> savgol_filter_impl(const array2d<float>& data,
@@ -311,10 +315,69 @@ array2d<float> envelope(const array2d<float>& data) {
     for (size_t s = 0; s < data.rows(); ++s) {
         std::vector<double> row(data.cols());
         for (size_t i = 0; i < data.cols(); ++i) row[i] = data[s][i];
-        const auto y = signal::hilbert_envelope(row);
-        for (size_t i = 0; i < data.cols(); ++i) out[s][i] = static_cast<float>(y[i]);
+        const auto z = signal::hilbert_analytic(row);
+        for (size_t i = 0; i < data.cols(); ++i) {
+            out[s][i] = static_cast<float>(std::abs(z[i]));
+        }
     }
     return out;
+}
+
+array2d<std::complex<float>> analytic(const array2d<float>& data) {
+    validate_rows(data);
+    array2d<std::complex<float>> out(data.rows(), data.cols());
+#ifdef SAMCORE_HAS_OPENMP
+#pragma omp parallel for if (data.rows() > 8)
+#endif
+    for (size_t s = 0; s < data.rows(); ++s) {
+        std::vector<double> row(data.cols());
+        for (size_t i = 0; i < data.cols(); ++i) row[i] = data[s][i];
+        const auto z = signal::hilbert_analytic(row);
+        for (size_t i = 0; i < data.cols(); ++i) {
+            out[s][i] = static_cast<std::complex<float>>(z[i]);
+        }
+    }
+    return out;
+}
+
+std::pair<std::vector<double>, std::vector<double>> phase_stats(
+    const array2d<float>& data) {
+    validate_rows(data);
+    const size_t rows = data.rows();
+    std::vector<double> mean(rows);
+    std::vector<double> var(rows);
+#ifdef SAMCORE_HAS_OPENMP
+#pragma omp parallel for if (rows > 8)
+#endif
+    for (size_t s = 0; s < rows; ++s) {
+        std::vector<double> row(data.cols());
+        for (size_t i = 0; i < data.cols(); ++i) row[i] = data[s][i];
+        const auto z = signal::hilbert_analytic(row);
+        double sum_sin = 0.0;
+        double sum_cos = 0.0;
+        for (const auto& v : z) {
+            const double phase = std::arg(v);
+            sum_sin += std::sin(phase);
+            sum_cos += std::cos(phase);
+        }
+        const double n = static_cast<double>(z.size());
+        const double mean_sin = sum_sin / n;
+        const double mean_cos = sum_cos / n;
+        const double r = std::hypot(mean_sin, mean_cos);
+        // A resultant length of (numerically) zero means the phases cancel,
+        // so the mean direction is undefined.  Without the threshold
+        // atan2() would turn rounding noise into an arbitrary angle.
+        if (r < kCircularMeanEps) {
+            mean[s] = 0.0;
+            var[s] = 1.0;
+        } else {
+            // Clamp: rounding can push r marginally above 1, which would
+            // make the variance negative.
+            mean[s] = std::atan2(mean_sin, mean_cos);
+            var[s] = 1.0 - std::min(1.0, r);
+        }
+    }
+    return {std::move(mean), std::move(var)};
 }
 
 array2d<float> moving_average(const array2d<float>& data, size_t window) {

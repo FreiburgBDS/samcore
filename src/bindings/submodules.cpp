@@ -9,8 +9,9 @@ void bind_submodules(nb::module_& m) {
         "preprocessing",
         "Signal preprocessing primitives operating on (n_signals, scanlen) "
         "float32 arrays.\n\n"
-        "Every function returns a freshly computed float32 array of the "
-        "same shape as ``data``.");
+        "Most functions return a freshly computed float32 array of the "
+        "same shape as ``data``; ``analytic`` returns complex64 and "
+        "``phase_stats`` returns one summary value per signal.");
     pp.def("lp",
            [](in_f32_2 data, double cutoff, double fs) {
                return to_numpy(without_gil([&] {
@@ -141,6 +142,52 @@ void bind_submodules(nb::module_& m) {
     }, nb::sig(
            "def envelope(data: numpy.typing.NDArray[numpy.float32]) -> numpy.typing.NDArray[numpy.float32]"),
        "Hilbert envelope of every signal.");
+    pp.def("analytic", [](in_f32_2 data) {
+        return to_numpy(without_gil(
+               [&] { return preprocessing::analytic(view_in<float>(data)); }));
+    }, nb::sig(
+           "def analytic(data: numpy.typing.NDArray[numpy.float32]) -> numpy.typing.NDArray[numpy.complex64]"),
+       "Analytic signal ``x + i*H{x}`` of every signal.\n\n"
+               "The envelope is ``abs(analytic(data))`` and the "
+               "instantaneous phase is ``angle(analytic(data))``, matching "
+               "``scipy.signal.hilbert``.  Computing the analytic signal "
+               "once gives both without a second Hilbert transform.\n\n"
+               "Parameters\n"
+               "----------\n"
+               "data : ndarray (float32)\n"
+               "    Signals of shape (n_signals, scanlen).\n\n"
+               "Returns\n"
+               "-------\n"
+               "ndarray (complex64)\n"
+               "    Analytic signal of shape (n_signals, scanlen).");
+    pp.def("phase_stats", [](in_f32_2 data) {
+        auto [mean, var] = without_gil(
+            [&] { return preprocessing::phase_stats(view_in<float>(data)); });
+        return nb::make_tuple(to_numpy(std::move(mean)),
+                              to_numpy(std::move(var)));
+    }, nb::sig(
+           "def phase_stats(data: numpy.typing.NDArray[numpy.float32]) -> tuple[numpy.typing.NDArray[numpy.float64], numpy.typing.NDArray[numpy.float64]]"),
+       "Circular mean and dispersion of the instantaneous phase.\n\n"
+               "For every signal the phase is ``angle(analytic(data))`` and "
+               "the statistics are computed from its sine/cosine components:\n"
+               "``phase_mean = atan2(mean(sin(phase)), mean(cos(phase)))`` "
+               "and ``phase_var = 1 - hypot(mean(sin(phase)), "
+               "mean(cos(phase)))``.  ``phase_mean`` is in radians and "
+               "``phase_var`` is in [0, 1] (0 = all phases equal, "
+               "1 = uniformly spread).\n\n"
+               "A silent (all-zero) signal has phase 0 at every sample, so it "
+               "returns ``phase_mean = 0`` and ``phase_var = 0``.  When the "
+               "phases cancel and the circular mean is undefined (resultant "
+               "length numerically zero) it returns ``phase_mean = 0`` and "
+               "``phase_var = 1``.\n\n"
+               "Parameters\n"
+               "----------\n"
+               "data : ndarray (float32)\n"
+               "    Signals of shape (n_signals, scanlen).\n\n"
+               "Returns\n"
+               "-------\n"
+               "(phase_mean, phase_var) : tuple of ndarray\n"
+               "    Two float64 arrays of shape (n_signals,).");
     pp.def("moving_average",
            [](in_f32_2 data, size_t window) {
                return to_numpy(without_gil([&] {

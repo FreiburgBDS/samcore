@@ -115,6 +115,109 @@ TEST(preprocessing, EnvelopeNonnegative) {
     }
 }
 
+TEST(preprocessing, AnalyticMatchesEnvelope) {
+    auto d = make_data(3, 97);
+    auto z = preprocessing::analytic(d);
+    auto env = preprocessing::envelope(d);
+    ASSERT_EQ(z.rows(), d.rows());
+    ASSERT_EQ(z.cols(), d.cols());
+    for (size_t s = 0; s < d.rows(); ++s) {
+        for (size_t i = 0; i < d.cols(); ++i) {
+            EXPECT_NEAR(std::abs(z[s][i]), env[s][i], 1e-6);
+        }
+    }
+}
+
+TEST(preprocessing, AnalyticNegativeConstant) {
+    array2d<float> d(1, 32, -2.0f);
+    auto z = preprocessing::analytic(d);
+    for (size_t i = 0; i < d.cols(); ++i) {
+        EXPECT_NEAR(z[0][i].real(), -2.0f, 1e-5);
+        EXPECT_NEAR(z[0][i].imag(), 0.0f, 1e-5);
+        EXPECT_NEAR(std::abs(z[0][i]), 2.0f, 1e-5);
+    }
+}
+
+TEST(preprocessing, AnalyticSingleSample) {
+    array2d<float> d(1, 1, 5.0f);
+    auto z = preprocessing::analytic(d);
+    EXPECT_NEAR(z[0][0].real(), 5.0f, 1e-6);
+    EXPECT_NEAR(z[0][0].imag(), 0.0f, 1e-6);
+    auto [mean, var] = preprocessing::phase_stats(d);
+    EXPECT_NEAR(mean[0], 0.0, 1e-9);
+    EXPECT_NEAR(var[0], 0.0, 1e-9);
+}
+
+TEST(preprocessing, PhaseStatsConstantSignals) {
+    array2d<float> d(2, 64, 3.0f);
+    for (size_t i = 0; i < d.cols(); ++i) d[1][i] = -3.0f;
+    auto [mean, var] = preprocessing::phase_stats(d);
+    ASSERT_EQ(mean.size(), 2u);
+    ASSERT_EQ(var.size(), 2u);
+    EXPECT_NEAR(mean[0], 0.0, 1e-9);
+    EXPECT_NEAR(var[0], 0.0, 1e-9);
+    EXPECT_NEAR(std::abs(mean[1]), 3.14159265358979323846, 1e-6);
+    EXPECT_NEAR(var[1], 0.0, 1e-9);
+}
+
+TEST(preprocessing, PhaseStatsSilent) {
+    array2d<float> d(1, 32, 0.0f);
+    auto [mean, var] = preprocessing::phase_stats(d);
+    ASSERT_EQ(mean.size(), 1u);
+    EXPECT_DOUBLE_EQ(mean[0], 0.0);
+    EXPECT_DOUBLE_EQ(var[0], 0.0);
+}
+
+TEST(preprocessing, PhaseStatsUndefinedMean) {
+    // Two samples with analytic phases 0 and pi: the mean components
+    // cancel (up to rounding), so the mean direction is undefined
+    // (reported as 0) and the phase is maximally spread (1).
+    array2d<float> d(1, 2);
+    d[0][0] = 1.0f;
+    d[0][1] = -1.0f;
+    auto [mean, var] = preprocessing::phase_stats(d);
+    EXPECT_DOUBLE_EQ(mean[0], 0.0);
+    EXPECT_DOUBLE_EQ(var[0], 1.0);
+}
+
+TEST(preprocessing, PhaseStatsMatchesManualReduction) {
+    auto d = make_data(4, 128);
+    auto [mean, var] = preprocessing::phase_stats(d);
+    auto z = preprocessing::analytic(d);
+    for (size_t s = 0; s < d.rows(); ++s) {
+        double sum_sin = 0.0;
+        double sum_cos = 0.0;
+        for (size_t i = 0; i < d.cols(); ++i) {
+            const double phase =
+                std::arg(std::complex<double>(z[s][i].real(), z[s][i].imag()));
+            sum_sin += std::sin(phase);
+            sum_cos += std::cos(phase);
+        }
+        sum_sin /= static_cast<double>(d.cols());
+        sum_cos /= static_cast<double>(d.cols());
+        // analytic() is complex64, so the reference is limited by float
+        // precision even though phase_stats() accumulates in double.
+        EXPECT_NEAR(mean[s], std::atan2(sum_sin, sum_cos), 1e-6);
+        EXPECT_NEAR(var[s], 1.0 - std::hypot(sum_sin, sum_cos), 1e-6);
+        EXPECT_GE(var[s], 0.0);
+        EXPECT_LE(var[s], 1.0);
+    }
+}
+
+TEST(preprocessing, PhaseStatsFullCycleIsSpread) {
+    // A pure tone spanning an integer number of cycles visits every phase
+    // direction equally, so the circular variance approaches 1.
+    array2d<float> d(1, 128);
+    for (size_t i = 0; i < d.cols(); ++i) {
+        d[0][i] = static_cast<float>(
+            std::cos(2.0 * 3.14159265358979323846 * 8.0 *
+                     static_cast<double>(i) / 128.0));
+    }
+    auto [mean, var] = preprocessing::phase_stats(d);
+    EXPECT_NEAR(var[0], 1.0, 1e-6);
+    EXPECT_TRUE(std::isfinite(mean[0]));
+}
+
 TEST(preprocessing, MovingAverage) {
     auto d = make_data(1, 100);
     auto out = preprocessing::moving_average(d, 5);
