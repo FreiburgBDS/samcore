@@ -20,9 +20,11 @@ if(NOT DEFINED STUB_DIR OR NOT DEFINED STUB_PKG OR NOT DEFINED PYTHON)
 endif()
 
 set(_modules samcore samcore._samcore samcore._scan samcore._labels
-             samcore._dataset samcore._io)
+             samcore._dataset samcore._io samcore.interop samcore._numpy)
 
-set(_args -i "${STUB_DIR}" -M "${STUB_PKG}/py.typed" -q)
+# --recursive also emits stubs for nanobind's C++ submodules, which live in
+# a _samcore/ stub package (preprocessing, utils and io).
+set(_args -i "${STUB_DIR}" -M "${STUB_PKG}/py.typed" -q -r)
 foreach(_m IN LISTS _modules)
     list(APPEND _args -m "${_m}")
 endforeach()

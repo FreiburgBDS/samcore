@@ -248,14 +248,22 @@ if(SAMCORE_BUILD_PYTHON)
 
     install(FILES
       "${SAMCORE_STUB_PKG}/__init__.pyi"
-      "${SAMCORE_STUB_PKG}/_samcore.pyi"
       "${SAMCORE_STUB_PKG}/_scan.pyi"
       "${SAMCORE_STUB_PKG}/_labels.pyi"
       "${SAMCORE_STUB_PKG}/_dataset.pyi"
       "${SAMCORE_STUB_PKG}/_io.pyi"
+      "${SAMCORE_STUB_PKG}/interop.pyi"
+      "${SAMCORE_STUB_PKG}/_numpy.pyi"
       "${SAMCORE_STUB_PKG}/py.typed"
       DESTINATION samcore
       OPTIONAL)
+
+    # The recursive run emits the extension as a stub package so the C++
+    # submodules (io, preprocessing, utils) get their own .pyi files.
+    install(DIRECTORY "${SAMCORE_STUB_PKG}/_samcore/"
+      DESTINATION samcore/_samcore
+      OPTIONAL
+      FILES_MATCHING PATTERN "*.pyi")
   else()
     message(STATUS
       "nanobind.stubgen not importable by ${Python_EXECUTABLE}; "
