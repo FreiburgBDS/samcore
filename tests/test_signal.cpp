@@ -170,6 +170,81 @@ TEST(signal, Medfilt1dKnown) {
     EXPECT_NEAR(y[8], 5.0, 1e-12);
 }
 
+TEST(signal, PeriodicWindowCoefficients) {
+    // scipy.signal.get_window(..., fftbins=True) parity.
+    const auto hann4 = make_window(window_kind::hann, 4);
+    EXPECT_DOUBLE_EQ(hann4[0], 0.0);
+    EXPECT_DOUBLE_EQ(hann4[1], 0.5);
+    EXPECT_DOUBLE_EQ(hann4[2], 1.0);
+    EXPECT_DOUBLE_EQ(hann4[3], 0.5);
+
+    const auto hamming4 = make_window(window_kind::hamming, 4);
+    EXPECT_NEAR(hamming4[0], 0.08, 1e-15);
+    EXPECT_NEAR(hamming4[1], 0.54, 1e-15);
+    EXPECT_DOUBLE_EQ(hamming4[2], 1.0);
+    EXPECT_NEAR(hamming4[3], 0.54, 1e-15);
+
+    const auto cosine4 = make_window(window_kind::cosine, 4);
+    EXPECT_NEAR(cosine4[0], 0.30901699437494745, 1e-15);
+    EXPECT_NEAR(cosine4[1], 0.8090169943749473, 1e-15);
+    EXPECT_NEAR(cosine4[2], 1.0, 1e-15);
+    EXPECT_NEAR(cosine4[3], 0.8090169943749473, 1e-15);
+
+    for (window_kind kind : {window_kind::hann, window_kind::hamming,
+                             window_kind::cosine}) {
+        EXPECT_EQ(make_window(kind, 1), (std::vector<double>{1.0}));
+    }
+    EXPECT_THROW((void)window_kind_from_string("boxcar"),
+                 std::invalid_argument);
+}
+
+TEST(signal, DefaultWindowMatchesExplicitHann) {
+    array2d<float> data(2, 300);
+    for (size_t i = 0; i < data.rows(); ++i) {
+        for (size_t j = 0; j < data.cols(); ++j) {
+            data[i][j] = static_cast<float>(
+                std::sin(0.07 * static_cast<double>(j) + i));
+        }
+    }
+    const auto a = spectrogram_psd(data, 1000.0, 64, 32);
+    const auto b =
+        spectrogram_psd(data, 1000.0, 64, 32, 0.0, 0.0, window_kind::hann);
+    EXPECT_EQ(a.f, b.f);
+    EXPECT_EQ(a.t, b.t);
+    ASSERT_EQ(a.sxx.flat().size(), b.sxx.flat().size());
+    EXPECT_TRUE(std::equal(a.sxx.flat().begin(), a.sxx.flat().end(),
+                           b.sxx.flat().begin()));
+}
+
+TEST(signal, SpectrogramFeaturesFlattenAndNormalize) {
+    array2d<float> data(2, 128);
+    for (size_t i = 0; i < data.rows(); ++i) {
+        for (size_t j = 0; j < data.cols(); ++j) {
+            data[i][j] = static_cast<float>(
+                static_cast<int>((j + i) % 17) - 8);
+        }
+    }
+    spectrogram_feature_options options;
+    options.nperseg = 32;
+    options.noverlap = 16;
+    options.f_min = 0.0;
+    options.f_max = 200.0;
+    options.l1_normalize = true;
+    const auto res = spectrogram_features(data, 1000.0, options);
+    ASSERT_EQ(res.features.rows(), 2u);
+    ASSERT_EQ(res.features.cols(), res.f.size() * res.t.size());
+    EXPECT_EQ(res.f.size(), 7u); // 0..200 Hz inclusive at 31.25 Hz spacing
+    EXPECT_EQ(res.t.size(), 7u);
+    for (size_t i = 0; i < res.features.rows(); ++i) {
+        double sum = 0.0;
+        for (float v : res.features[i]) sum += v;
+        EXPECT_NEAR(sum, 1.0, 1e-6);
+    }
+    EXPECT_THROW(
+        (void)spectrogram_features(data, 0.0, options),
+        std::invalid_argument);
+}
+
 TEST(signal, StftShape) {
     array2d<float> data(3, 2000, 0.0f);
     auto res = stft(data, 100.0e6, 256, 128);

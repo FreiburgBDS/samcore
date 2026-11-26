@@ -286,6 +286,63 @@ void bind_submodules(nb::module_& m) {
                    "(magnitude, freqs) : tuple of ndarray\n"
                    "    Magnitude of shape (n_signals, n_freqs) and the "
                    "frequency bins in 1/d units (numpy rfft/rfftfreq parity); with ``d`` in ns the bins are in GHz.");
+    ut.def("spectrogram_features",
+           [](in_f32_2 data, double fs, size_t nperseg, size_t noverlap,
+              const std::string& window, double f_min, double f_max,
+              bool l1_normalize) {
+               signal::spectrogram_feature_options options;
+               options.nperseg = nperseg;
+               options.noverlap = noverlap;
+               options.window = signal::window_kind_from_string(window);
+               options.f_min = f_min;
+               options.f_max = f_max;
+               options.l1_normalize = l1_normalize;
+               auto r = without_gil([&] {
+                   return signal::spectrogram_features(
+                       view_in<float>(data), fs, options);
+               });
+               return nb::make_tuple(to_numpy(std::move(r.features)),
+                                     to_numpy(std::move(r.f)),
+                                     to_numpy(std::move(r.t)));
+           },
+           nb::arg("data"), nb::arg("fs"), nb::arg("nperseg") = 128,
+           nb::arg("noverlap") = 96, nb::arg("window") = "hann",
+           nb::arg("f_min") = 0.0, nb::arg("f_max") = 0.0,
+           nb::arg("l1_normalize") = false,
+           nb::sig(
+               "def spectrogram_features(data: numpy.typing.NDArray[numpy.float32], fs: float, nperseg: int = 128, noverlap: int = 96, window: str = 'hann', f_min: float = 0.0, f_max: float = 0.0, l1_normalize: bool = False) -> tuple[numpy.typing.NDArray[numpy.float32], numpy.typing.NDArray[numpy.float64], numpy.typing.NDArray[numpy.float64]]"),
+           "Flattened scipy-compatible spectrogram features.\n\n"
+                   "Equivalent to ``scipy.signal.spectrogram(..., mode='psd', "
+                   "scaling='density', detrend=False, return_onesided=True)`` "
+                   "followed by band limiting, C-order flattening "
+                   "(frequency-major, then frame) and optional per-row L1 "
+                   "normalization with ``F /= F.sum(axis=1) + 1e-12``.\n\n"
+                   "Parameters\n"
+                   "----------\n"
+                   "data : ndarray (float32)\n"
+                   "    Signals of shape (n_signals, n_samples).  Other "
+                   "dtypes/layouts are converted at the binding boundary.\n"
+                   "fs : float\n"
+                   "    Sampling rate in Hz.\n"
+                   "nperseg : int, optional\n"
+                   "    Samples per segment.  Default 128.\n"
+                   "noverlap : int, optional\n"
+                   "    Samples of overlap.  Default 96.\n"
+                   "window : str, optional\n"
+                   "    Periodic window: 'hann' (default), 'hamming' or "
+                   "'cosine'.\n"
+                   "f_min, f_max : float, optional\n"
+                   "    Inclusive frequency band in Hz; f_max=0 means "
+                   "Nyquist.\n"
+                   "l1_normalize : bool, optional\n"
+                   "    L1-normalize each flattened feature row over the kept "
+                   "bins.  Default False.\n\n"
+                   "Returns\n"
+                   "-------\n"
+                   "(F, f, t) : tuple of ndarray\n"
+                   "    F is float32 (n_signals, n_kept_freqs * n_frames); f "
+                   "and t are float64 frequency bins (Hz) and frame-centre "
+                   "times (seconds).");
     ut.def("spectral_entropy",
            [](in_f32_2 psd, double base) {
                return to_numpy(without_gil(

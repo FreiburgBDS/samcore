@@ -1250,11 +1250,13 @@ double stft_time_origin(const sam_scan& s) {
 
 signal::stft_result sam_scan::compute_stft(size_t nperseg, size_t noverlap,
                                            double f_min, double f_max,
-                                           bool absolute) const {
+                                           bool absolute,
+                                           signal::window_kind window) const {
     ensure_loaded();
     const array2d<float> fdata = to_float(data_);
     const double fs = samplerate() * 1e6;
-    auto res = signal::stft(fdata, fs, nperseg, noverlap, f_min, f_max);
+    auto res = signal::stft(fdata, fs, nperseg, noverlap, f_min, f_max,
+                            window);
     if (absolute) {
         const double offset = stft_time_origin(*this);
         for (auto& t : res.t) t += static_cast<float>(offset);
@@ -1263,20 +1265,21 @@ signal::stft_result sam_scan::compute_stft(size_t nperseg, size_t noverlap,
 }
 
 signal::psd_result sam_scan::psd(size_t nperseg, size_t noverlap,
-                                 double f_min, double f_max) const {
+                                 double f_min, double f_max,
+                                 signal::window_kind window) const {
     ensure_loaded();
     const array2d<float> fdata = to_float(data_);
     return signal::welch_psd(fdata, samplerate() * 1e6, nperseg, noverlap,
-                             f_min, f_max);
+                             f_min, f_max, window);
 }
 
 signal::spectrogram_result sam_scan::power_spectrogram(
     size_t nperseg, size_t noverlap, double f_min, double f_max,
-    bool absolute) const {
+    bool absolute, signal::window_kind window) const {
     ensure_loaded();
     const array2d<float> fdata = to_float(data_);
     auto res = signal::spectrogram_psd(fdata, samplerate() * 1e6, nperseg,
-                                       noverlap, f_min, f_max);
+                                       noverlap, f_min, f_max, window);
     if (absolute) {
         const double offset = stft_time_origin(*this);
         for (auto& t : res.t) t += static_cast<float>(offset);
@@ -1284,23 +1287,25 @@ signal::spectrogram_result sam_scan::power_spectrogram(
     return res;
 }
 
-array2d<float> sam_scan::stft_peak_frequency(size_t nperseg, size_t noverlap,
-                                             double f_min, double f_max) const {
+array2d<float> sam_scan::stft_peak_frequency(
+    size_t nperseg, size_t noverlap, double f_min, double f_max,
+    signal::window_kind window) const {
     ensure_loaded();
     const array2d<float> fdata = to_float(data_);
     const auto res = signal::stft_peaks(fdata, samplerate() * 1e6, nperseg,
-                                        noverlap, f_min, f_max);
+                                        noverlap, f_min, f_max, window);
     return reshape_signals(res.peak_frequency, static_cast<size_t>(nlines()),
                            static_cast<size_t>(cols()));
 }
 
 array2d<float> sam_scan::stft_peak_time(size_t nperseg, size_t noverlap,
                                         double f_min, double f_max,
-                                        bool absolute) const {
+                                        bool absolute,
+                                        signal::window_kind window) const {
     ensure_loaded();
     const array2d<float> fdata = to_float(data_);
     const auto res = signal::stft_peaks(fdata, samplerate() * 1e6, nperseg,
-                                        noverlap, f_min, f_max);
+                                        noverlap, f_min, f_max, window);
     std::vector<float> times = res.peak_time;
     if (absolute) {
         const double offset = stft_time_origin(*this);

@@ -487,9 +487,11 @@ nb::class_<sam_dataset>(m, "SAMDataset", nb::dynamic_attr(),
              "Align every dataset row to the reference envelope peak.")
         .def("compute_stft",
              [](const sam_dataset& d, size_t nperseg, size_t noverlap,
-                double f_min, double f_max) {
+                double f_min, double f_max, const std::string& window) {
+                 const auto kind = signal::window_kind_from_string(window);
                  auto r = without_gil([&] {
-                     return d.compute_stft(nperseg, noverlap, f_min, f_max);
+                     return d.compute_stft(nperseg, noverlap, f_min, f_max,
+                                           kind);
                  });
                  return nb::make_tuple(to_numpy(std::move(r.f)),
                                        to_numpy(std::move(r.t)),
@@ -497,8 +499,9 @@ nb::class_<sam_dataset>(m, "SAMDataset", nb::dynamic_attr(),
              },
              nb::arg("nperseg") = 256, nb::arg("noverlap") = 128,
              nb::arg("f_min") = 0.0, nb::arg("f_max") = 0.0,
+             nb::arg("window") = "hann",
              nb::sig(
-                 "def compute_stft(self, nperseg: int = 256, noverlap: int = 128, f_min: float = 0.0, f_max: float = 0.0) -> tuple[numpy.typing.NDArray[numpy.float32], numpy.typing.NDArray[numpy.float32], numpy.typing.NDArray[numpy.complex64]]"),
+                 "def compute_stft(self, nperseg: int = 256, noverlap: int = 128, f_min: float = 0.0, f_max: float = 0.0, window: str = 'hann') -> tuple[numpy.typing.NDArray[numpy.float32], numpy.typing.NDArray[numpy.float32], numpy.typing.NDArray[numpy.complex64]]"),
              "STFT of every dataset row.\n\n"
                      "Requires a common ``samplerate`` and a common valid "
                      "length across cubes.  Times are relative to the start "
@@ -506,10 +509,11 @@ nb::class_<sam_dataset>(m, "SAMDataset", nb::dynamic_attr(),
                      "ragged datasets.")
         .def("compute_stft_by_cube",
              [](const sam_dataset& d, size_t nperseg, size_t noverlap,
-                double f_min, double f_max) {
+                double f_min, double f_max, const std::string& window) {
+                 const auto kind = signal::window_kind_from_string(window);
                  auto results = without_gil([&] {
                      return d.compute_stft_by_cube(nperseg, noverlap, f_min,
-                                                   f_max);
+                                                   f_max, kind);
                  });
                  nb::list out;
                  for (auto& r : results) {
@@ -521,26 +525,31 @@ nb::class_<sam_dataset>(m, "SAMDataset", nb::dynamic_attr(),
              },
              nb::arg("nperseg") = 256, nb::arg("noverlap") = 128,
              nb::arg("f_min") = 0.0, nb::arg("f_max") = 0.0,
+             nb::arg("window") = "hann",
              "Per-cube STFT results as a list of (freqs, times, zxx).")
         .def("psd",
              [](const sam_dataset& d, size_t nperseg, size_t noverlap,
-                double f_min, double f_max) {
+                double f_min, double f_max, const std::string& window) {
+                 const auto kind = signal::window_kind_from_string(window);
                  auto r = without_gil([&] {
-                     return d.psd(nperseg, noverlap, f_min, f_max);
+                     return d.psd(nperseg, noverlap, f_min, f_max, kind);
                  });
                  return nb::make_tuple(to_numpy(std::move(r.f)),
                                        to_numpy(std::move(r.psd)));
              },
              nb::arg("nperseg") = 256, nb::arg("noverlap") = 128,
              nb::arg("f_min") = 0.0, nb::arg("f_max") = 0.0,
+             nb::arg("window") = "hann",
              nb::sig(
-                 "def psd(self, nperseg: int = 256, noverlap: int = 128, f_min: float = 0.0, f_max: float = 0.0) -> tuple[numpy.typing.NDArray[numpy.float32], numpy.typing.NDArray[numpy.float32]]"),
+                 "def psd(self, nperseg: int = 256, noverlap: int = 128, f_min: float = 0.0, f_max: float = 0.0, window: str = 'hann') -> tuple[numpy.typing.NDArray[numpy.float32], numpy.typing.NDArray[numpy.float32]]"),
              "Welch PSD of every dataset row, excluding padded samples.")
         .def("psd_by_cube",
              [](const sam_dataset& d, size_t nperseg, size_t noverlap,
-                double f_min, double f_max) {
+                double f_min, double f_max, const std::string& window) {
+                 const auto kind = signal::window_kind_from_string(window);
                  auto results = without_gil([&] {
-                     return d.psd_by_cube(nperseg, noverlap, f_min, f_max);
+                     return d.psd_by_cube(nperseg, noverlap, f_min, f_max,
+                                          kind);
                  });
                  nb::list out;
                  for (auto& r : results) {
@@ -551,13 +560,15 @@ nb::class_<sam_dataset>(m, "SAMDataset", nb::dynamic_attr(),
              },
              nb::arg("nperseg") = 256, nb::arg("noverlap") = 128,
              nb::arg("f_min") = 0.0, nb::arg("f_max") = 0.0,
+             nb::arg("window") = "hann",
              "Per-cube Welch PSD results as a list of (freqs, psd).")
         .def("power_spectrogram",
              [](const sam_dataset& d, size_t nperseg, size_t noverlap,
-                double f_min, double f_max) {
+                double f_min, double f_max, const std::string& window) {
+                 const auto kind = signal::window_kind_from_string(window);
                  auto r = without_gil([&] {
                      return d.power_spectrogram(nperseg, noverlap, f_min,
-                                                f_max);
+                                                f_max, kind);
                  });
                  return nb::make_tuple(to_numpy(std::move(r.f)),
                                        to_numpy(std::move(r.t)),
@@ -565,17 +576,19 @@ nb::class_<sam_dataset>(m, "SAMDataset", nb::dynamic_attr(),
              },
              nb::arg("nperseg") = 256, nb::arg("noverlap") = 128,
              nb::arg("f_min") = 0.0, nb::arg("f_max") = 0.0,
+             nb::arg("window") = "hann",
              nb::sig(
-                 "def power_spectrogram(self, nperseg: int = 256, noverlap: int = 128, f_min: float = 0.0, f_max: float = 0.0) -> tuple[numpy.typing.NDArray[numpy.float32], numpy.typing.NDArray[numpy.float32], numpy.typing.NDArray[numpy.float32]]"),
+                 "def power_spectrogram(self, nperseg: int = 256, noverlap: int = 128, f_min: float = 0.0, f_max: float = 0.0, window: str = 'hann') -> tuple[numpy.typing.NDArray[numpy.float32], numpy.typing.NDArray[numpy.float32], numpy.typing.NDArray[numpy.float32]]"),
              "Power spectrogram of every dataset row.\n\n"
                      "Requires a common samplerate and common valid length; "
                      "times are relative to each signal's start.")
         .def("power_spectrogram_by_cube",
              [](const sam_dataset& d, size_t nperseg, size_t noverlap,
-                double f_min, double f_max) {
+                double f_min, double f_max, const std::string& window) {
+                 const auto kind = signal::window_kind_from_string(window);
                  auto results = without_gil([&] {
                      return d.power_spectrogram_by_cube(
-                         nperseg, noverlap, f_min, f_max);
+                         nperseg, noverlap, f_min, f_max, kind);
                  });
                  nb::list out;
                  for (auto& r : results) {
@@ -587,34 +600,76 @@ nb::class_<sam_dataset>(m, "SAMDataset", nb::dynamic_attr(),
              },
              nb::arg("nperseg") = 256, nb::arg("noverlap") = 128,
              nb::arg("f_min") = 0.0, nb::arg("f_max") = 0.0,
+             nb::arg("window") = "hann",
              "Per-cube power spectrograms as a list of (freqs, times, sxx).")
         .def("stft_peak_frequency",
              [](const sam_dataset& d, size_t nperseg, size_t noverlap,
-                double f_min, double f_max) {
+                double f_min, double f_max, const std::string& window) {
+                 const auto kind = signal::window_kind_from_string(window);
                  return to_numpy(without_gil([&] {
                      return d.stft_peak_frequency(nperseg, noverlap, f_min,
-                                                  f_max);
+                                                  f_max, kind);
                  }));
              },
              nb::arg("nperseg") = 256, nb::arg("noverlap") = 128,
              nb::arg("f_min") = 0.0, nb::arg("f_max") = 0.0,
+             nb::arg("window") = "hann",
              nb::sig(
-                 "def stft_peak_frequency(self, nperseg: int = 256, noverlap: int = 128, f_min: float = 0.0, f_max: float = 0.0) -> numpy.typing.NDArray[numpy.float32]"),
+                 "def stft_peak_frequency(self, nperseg: int = 256, noverlap: int = 128, f_min: float = 0.0, f_max: float = 0.0, window: str = 'hann') -> numpy.typing.NDArray[numpy.float32]"),
              "Peak STFT frequency per dataset row (Hz).")
         .def("stft_peak_time",
              [](const sam_dataset& d, size_t nperseg, size_t noverlap,
-                double f_min, double f_max) {
+                double f_min, double f_max, const std::string& window) {
+                 const auto kind = signal::window_kind_from_string(window);
                  return to_numpy(without_gil([&] {
                      return d.stft_peak_time(nperseg, noverlap, f_min,
-                                             f_max);
+                                             f_max, kind);
                  }));
              },
              nb::arg("nperseg") = 256, nb::arg("noverlap") = 128,
              nb::arg("f_min") = 0.0, nb::arg("f_max") = 0.0,
+             nb::arg("window") = "hann",
              nb::sig(
-                 "def stft_peak_time(self, nperseg: int = 256, noverlap: int = 128, f_min: float = 0.0, f_max: float = 0.0) -> numpy.typing.NDArray[numpy.float32]"),
+                 "def stft_peak_time(self, nperseg: int = 256, noverlap: int = 128, f_min: float = 0.0, f_max: float = 0.0, window: str = 'hann') -> numpy.typing.NDArray[numpy.float32]"),
              "Peak STFT time per dataset row (seconds, relative to each "
              "signal start).")
+        .def("spectrogram_features",
+             [](const sam_dataset& d, size_t nperseg, size_t noverlap,
+                const std::string& window, double f_min, double f_max,
+                bool l1_normalize, std::optional<double> fs_mhz) {
+                 signal::spectrogram_feature_options options;
+                 options.nperseg = nperseg;
+                 options.noverlap = noverlap;
+                 options.window = signal::window_kind_from_string(window);
+                 options.f_min = f_min;
+                 options.f_max = f_max;
+                 options.l1_normalize = l1_normalize;
+                 auto r = without_gil([&] {
+                     return d.spectrogram_features(options, fs_mhz);
+                 });
+                 return nb::make_tuple(to_numpy(std::move(r.features)),
+                                       to_numpy(std::move(r.f)),
+                                       to_numpy(std::move(r.t)));
+             },
+             nb::arg("nperseg") = 128, nb::arg("noverlap") = 96,
+             nb::arg("window") = "hann", nb::arg("f_min") = 0.0,
+             nb::arg("f_max") = 0.0, nb::arg("l1_normalize") = false,
+             nb::arg("fs_mhz") = nb::none(),
+             nb::sig(
+                 "def spectrogram_features(self, nperseg: int = 128, noverlap: int = 96, window: str = 'hann', f_min: float = 0.0, f_max: float = 0.0, l1_normalize: bool = False, fs_mhz: float | None = None) -> tuple[numpy.typing.NDArray[numpy.float32], numpy.typing.NDArray[numpy.float64], numpy.typing.NDArray[numpy.float64]]"),
+             "Flattened scipy-compatible spectrogram features for the dataset.\n\n"
+                     "Each row is ``Sxx[kept_bins, :].reshape(-1)`` in "
+                     "frequency-major order, optionally L1-normalized.  "
+                     "Requires a common sampling rate and valid length "
+                     "across cubes.  ``fs_mhz`` overrides sampling-rate "
+                     "metadata (for legacy files) and must agree with it "
+                     "when present.\n\n"
+                     "Returns\n"
+                     "-------\n"
+                     "(F, f, t) : tuple of ndarray\n"
+                     "    Features (n_signals, n_kept_freqs * n_frames) "
+                     "float32, frequency bins (float64) and frame-centre "
+                     "times in seconds (float64).")
         .def("spectrum",
              [](const sam_dataset& d) {
                  auto r = without_gil([&] { return d.spectrum(); });

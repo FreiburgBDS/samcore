@@ -758,10 +758,11 @@ void bind_scan(nb::module_& m) {
                      "pick failed).")
         .def("_compute_stft",
              [](sam_scan& s, size_t nperseg, size_t noverlap, double f_min,
-                double f_max, bool absolute) {
+                double f_max, bool absolute, const std::string& window) {
+                 const auto kind = signal::window_kind_from_string(window);
                  signal::stft_result r = without_gil([&] {
                      return s.compute_stft(nperseg, noverlap, f_min, f_max,
-                                           absolute);
+                                           absolute, kind);
                  });
                  return nb::make_tuple(to_numpy(std::move(r.f)),
                                        to_numpy(std::move(r.t)),
@@ -769,9 +770,9 @@ void bind_scan(nb::module_& m) {
              },
              nb::arg("nperseg") = 256, nb::arg("noverlap") = 128,
              nb::arg("f_min") = 0.0, nb::arg("f_max") = 0.0,
-             nb::arg("absolute") = true,
+             nb::arg("absolute") = true, nb::arg("window") = "hann",
              nb::sig(
-                 "def _compute_stft(self, nperseg: int = 256, noverlap: int = 128, f_min: float = 0.0, f_max: float = 0.0, absolute: bool = True) -> tuple[numpy.typing.NDArray[numpy.float32], numpy.typing.NDArray[numpy.float32], numpy.typing.NDArray[numpy.complex64]]"),
+                 "def _compute_stft(self, nperseg: int = 256, noverlap: int = 128, f_min: float = 0.0, f_max: float = 0.0, absolute: bool = True, window: str = 'hann') -> tuple[numpy.typing.NDArray[numpy.float32], numpy.typing.NDArray[numpy.float32], numpy.typing.NDArray[numpy.complex64]]"),
              "Compute the one-sided Short-Time Fourier Transform (STFT) of "
                      "every A-scan.\n\n"
                      "SAM data is real-valued, so only positive-frequency "
@@ -786,6 +787,9 @@ void bind_scan(nb::module_& m) {
                      "    Samples of overlap between segments.\n"
                      "f_min, f_max : float, optional\n"
                      "    Frequency band limits in Hz.\n"
+                     "window : str, optional\n"
+                     "    Periodic window: 'hann' (default), 'hamming' or "
+                     "'cosine'.\n"
                      "absolute : bool, optional\n"
                      "    If True (default), times are on the handler's time "
                      "scale (``time()[0]`` + frame centre).  If False, times "
@@ -802,17 +806,19 @@ void bind_scan(nb::module_& m) {
                      "(n_signals, n_freqs, n_frames).")
         .def("psd",
              [](sam_scan& s, size_t nperseg, size_t noverlap, double f_min,
-                double f_max) {
+                double f_max, const std::string& window) {
+                 const auto kind = signal::window_kind_from_string(window);
                  signal::psd_result r = without_gil([&] {
-                     return s.psd(nperseg, noverlap, f_min, f_max);
+                     return s.psd(nperseg, noverlap, f_min, f_max, kind);
                  });
                  return nb::make_tuple(to_numpy(std::move(r.f)),
                                        to_numpy(std::move(r.psd)));
              },
              nb::arg("nperseg") = 256, nb::arg("noverlap") = 128,
              nb::arg("f_min") = 0.0, nb::arg("f_max") = 0.0,
+             nb::arg("window") = "hann",
              nb::sig(
-                 "def psd(self, nperseg: int = 256, noverlap: int = 128, f_min: float = 0.0, f_max: float = 0.0) -> tuple[numpy.typing.NDArray[numpy.float32], numpy.typing.NDArray[numpy.float32]]"),
+                 "def psd(self, nperseg: int = 256, noverlap: int = 128, f_min: float = 0.0, f_max: float = 0.0, window: str = 'hann') -> tuple[numpy.typing.NDArray[numpy.float32], numpy.typing.NDArray[numpy.float32]]"),
              "Power spectral density of every A-scan via Welch's method.\n\n"
                      "With ``f_max > 0`` only bins in ``[f_min, f_max]`` Hz "
                      "are returned (``f_max = 0`` means Nyquist).\n\n"
@@ -823,7 +829,10 @@ void bind_scan(nb::module_& m) {
                      "noverlap : int, optional\n"
                      "    Samples of overlap between segments.\n"
                      "f_min, f_max : float, optional\n"
-                     "    Frequency band limits in Hz.\n\n"
+                     "    Frequency band limits in Hz.\n"
+                     "window : str, optional\n"
+                     "    Periodic window: 'hann' (default), 'hamming' or "
+                     "'cosine'.\n\n"
                      "Returns\n"
                      "-------\n"
                      "(freqs, psd) : tuple of ndarray\n"
@@ -831,10 +840,11 @@ void bind_scan(nb::module_& m) {
                      "(n_signals, n_freqs).")
         .def("power_spectrogram",
              [](sam_scan& s, size_t nperseg, size_t noverlap, double f_min,
-                double f_max, bool absolute) {
+                double f_max, bool absolute, const std::string& window) {
+                 const auto kind = signal::window_kind_from_string(window);
                  signal::spectrogram_result r = without_gil([&] {
                      return s.power_spectrogram(nperseg, noverlap, f_min,
-                                                f_max, absolute);
+                                                f_max, absolute, kind);
                  });
                  return nb::make_tuple(to_numpy(std::move(r.f)),
                                        to_numpy(std::move(r.t)),
@@ -842,9 +852,9 @@ void bind_scan(nb::module_& m) {
              },
              nb::arg("nperseg") = 256, nb::arg("noverlap") = 128,
              nb::arg("f_min") = 0.0, nb::arg("f_max") = 0.0,
-             nb::arg("absolute") = true,
+             nb::arg("absolute") = true, nb::arg("window") = "hann",
              nb::sig(
-                 "def power_spectrogram(self, nperseg: int = 256, noverlap: int = 128, f_min: float = 0.0, f_max: float = 0.0, absolute: bool = True) -> tuple[numpy.typing.NDArray[numpy.float32], numpy.typing.NDArray[numpy.float32], numpy.typing.NDArray[numpy.float32]]"),
+                 "def power_spectrogram(self, nperseg: int = 256, noverlap: int = 128, f_min: float = 0.0, f_max: float = 0.0, absolute: bool = True, window: str = 'hann') -> tuple[numpy.typing.NDArray[numpy.float32], numpy.typing.NDArray[numpy.float32], numpy.typing.NDArray[numpy.float32]]"),
              "Compute the power spectrogram of every A-scan.\n\n"
                      "Uses the same window and segment parameters as the "
                      "STFT.  With ``f_max > 0`` only bins in "
@@ -858,6 +868,9 @@ void bind_scan(nb::module_& m) {
                      "    Samples of overlap between segments.\n"
                      "f_min, f_max : float, optional\n"
                      "    Frequency band limits in Hz.\n"
+                     "window : str, optional\n"
+                     "    Periodic window: 'hann' (default), 'hamming' or "
+                     "'cosine'.\n"
                      "absolute : bool, optional\n"
                      "    If True (default), times are on the handler's time "
                      "scale (``time()[0]`` + frame centre), matching "
@@ -874,16 +887,18 @@ void bind_scan(nb::module_& m) {
                      "shape (n_signals, n_freqs, n_frames).")
         .def("stft_peak_frequency",
              [](sam_scan& s, size_t nperseg, size_t noverlap, double f_min,
-                double f_max) {
+                double f_max, const std::string& window) {
+                 const auto kind = signal::window_kind_from_string(window);
                  return to_numpy(without_gil([&] {
                      return s.stft_peak_frequency(nperseg, noverlap, f_min,
-                                                  f_max);
+                                                  f_max, kind);
                  }));
              },
              nb::arg("nperseg") = 256, nb::arg("noverlap") = 128,
              nb::arg("f_min") = 0.0, nb::arg("f_max") = 0.0,
+             nb::arg("window") = "hann",
              nb::sig(
-                 "def stft_peak_frequency(self, nperseg: int = 256, noverlap: int = 128, f_min: float = 0.0, f_max: float = 0.0) -> numpy.typing.NDArray[numpy.float32]"),
+                 "def stft_peak_frequency(self, nperseg: int = 256, noverlap: int = 128, f_min: float = 0.0, f_max: float = 0.0, window: str = 'hann') -> numpy.typing.NDArray[numpy.float32]"),
              "Peak STFT frequency per A-scan (Hz), reshaped to "
                      "(nlines, cols).\n\n"
                      "For every scan the frequency with the largest "
@@ -891,17 +906,18 @@ void bind_scan(nb::module_& m) {
                      "limited with ``f_min``/``f_max``.")
         .def("stft_peak_time",
              [](sam_scan& s, size_t nperseg, size_t noverlap, double f_min,
-                double f_max, bool absolute) {
+                double f_max, bool absolute, const std::string& window) {
+                 const auto kind = signal::window_kind_from_string(window);
                  return to_numpy(without_gil([&] {
                      return s.stft_peak_time(nperseg, noverlap, f_min, f_max,
-                                             absolute);
+                                             absolute, kind);
                  }));
              },
              nb::arg("nperseg") = 256, nb::arg("noverlap") = 128,
              nb::arg("f_min") = 0.0, nb::arg("f_max") = 0.0,
-             nb::arg("absolute") = true,
+             nb::arg("absolute") = true, nb::arg("window") = "hann",
              nb::sig(
-                 "def stft_peak_time(self, nperseg: int = 256, noverlap: int = 128, f_min: float = 0.0, f_max: float = 0.0, absolute: bool = True) -> numpy.typing.NDArray[numpy.float32]"),
+                 "def stft_peak_time(self, nperseg: int = 256, noverlap: int = 128, f_min: float = 0.0, f_max: float = 0.0, absolute: bool = True, window: str = 'hann') -> numpy.typing.NDArray[numpy.float32]"),
              "Peak STFT time per A-scan (seconds), reshaped to "
                      "(nlines, cols).\n\n"
                      "For every scan the frame with the largest "

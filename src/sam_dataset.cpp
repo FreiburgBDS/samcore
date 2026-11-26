@@ -892,8 +892,10 @@ array2d<float> sam_dataset::cube_valid_rows(std::int32_t idx) const {
 }
 
 signal::stft_result sam_dataset::compute_stft(size_t nperseg, size_t noverlap,
-                                              double f_min, double f_max) const {
-    auto parts = compute_stft_by_cube(nperseg, noverlap, f_min, f_max);
+                                              double f_min, double f_max,
+                                              signal::window_kind window) const {
+    auto parts =
+        compute_stft_by_cube(nperseg, noverlap, f_min, f_max, window);
     if (parts.empty()) {
         throw std::runtime_error("Dataset is empty.");
     }
@@ -917,20 +919,23 @@ signal::stft_result sam_dataset::compute_stft(size_t nperseg, size_t noverlap,
 }
 
 std::vector<signal::stft_result> sam_dataset::compute_stft_by_cube(
-    size_t nperseg, size_t noverlap, double f_min, double f_max) const {
+    size_t nperseg, size_t noverlap, double f_min, double f_max,
+    signal::window_kind window) const {
     const double fs = require_samplerate() * 1e6;
     std::vector<signal::stft_result> out;
     out.reserve(cube_shapes_.size());
     for (size_t i = 0; i < cube_shapes_.size(); ++i) {
         auto rows = cube_valid_rows(static_cast<std::int32_t>(i));
-        out.push_back(signal::stft(rows, fs, nperseg, noverlap, f_min, f_max));
+        out.push_back(signal::stft(rows, fs, nperseg, noverlap, f_min, f_max,
+                                   window));
     }
     return out;
 }
 
 signal::psd_result sam_dataset::psd(size_t nperseg, size_t noverlap,
-                                    double f_min, double f_max) const {
-    auto parts = psd_by_cube(nperseg, noverlap, f_min, f_max);
+                                    double f_min, double f_max,
+                                    signal::window_kind window) const {
+    auto parts = psd_by_cube(nperseg, noverlap, f_min, f_max, window);
     if (parts.empty()) {
         throw std::runtime_error("Dataset is empty.");
     }
@@ -953,22 +958,24 @@ signal::psd_result sam_dataset::psd(size_t nperseg, size_t noverlap,
 }
 
 std::vector<signal::psd_result> sam_dataset::psd_by_cube(
-    size_t nperseg, size_t noverlap, double f_min, double f_max) const {
+    size_t nperseg, size_t noverlap, double f_min, double f_max,
+    signal::window_kind window) const {
     const double fs = require_samplerate() * 1e6;
     std::vector<signal::psd_result> out;
     out.reserve(cube_shapes_.size());
     for (size_t i = 0; i < cube_shapes_.size(); ++i) {
         auto rows = cube_valid_rows(static_cast<std::int32_t>(i));
-        out.push_back(
-            signal::welch_psd(rows, fs, nperseg, noverlap, f_min, f_max));
+        out.push_back(signal::welch_psd(rows, fs, nperseg, noverlap, f_min,
+                                        f_max, window));
     }
     return out;
 }
 
 signal::spectrogram_result sam_dataset::power_spectrogram(
-    size_t nperseg, size_t noverlap, double f_min, double f_max) const {
-    auto parts =
-        power_spectrogram_by_cube(nperseg, noverlap, f_min, f_max);
+    size_t nperseg, size_t noverlap, double f_min, double f_max,
+    signal::window_kind window) const {
+    auto parts = power_spectrogram_by_cube(nperseg, noverlap, f_min, f_max,
+                                           window);
     if (parts.empty()) {
         throw std::runtime_error("Dataset is empty.");
     }
@@ -992,27 +999,29 @@ signal::spectrogram_result sam_dataset::power_spectrogram(
 
 std::vector<signal::spectrogram_result>
 sam_dataset::power_spectrogram_by_cube(size_t nperseg, size_t noverlap,
-                                       double f_min, double f_max) const {
+                                       double f_min, double f_max,
+                                       signal::window_kind window) const {
     const double fs = require_samplerate() * 1e6;
     std::vector<signal::spectrogram_result> out;
     out.reserve(cube_shapes_.size());
     for (size_t i = 0; i < cube_shapes_.size(); ++i) {
         auto rows = cube_valid_rows(static_cast<std::int32_t>(i));
-        out.push_back(
-            signal::spectrogram_psd(rows, fs, nperseg, noverlap, f_min, f_max));
+        out.push_back(signal::spectrogram_psd(rows, fs, nperseg, noverlap,
+                                              f_min, f_max, window));
     }
     return out;
 }
 
 std::vector<float> sam_dataset::stft_peak_frequency(
-    size_t nperseg, size_t noverlap, double f_min, double f_max) const {
+    size_t nperseg, size_t noverlap, double f_min, double f_max,
+    signal::window_kind window) const {
     const double fs = require_samplerate() * 1e6;
     std::vector<float> out;
     out.reserve(num_samples());
     for (size_t i = 0; i < cube_shapes_.size(); ++i) {
         auto rows = cube_valid_rows(static_cast<std::int32_t>(i));
-        auto peaks =
-            signal::stft_peaks(rows, fs, nperseg, noverlap, f_min, f_max);
+        auto peaks = signal::stft_peaks(rows, fs, nperseg, noverlap, f_min,
+                                        f_max, window);
         out.insert(out.end(), peaks.peak_frequency.begin(),
                    peaks.peak_frequency.end());
     }
@@ -1020,15 +1029,75 @@ std::vector<float> sam_dataset::stft_peak_frequency(
 }
 
 std::vector<float> sam_dataset::stft_peak_time(
-    size_t nperseg, size_t noverlap, double f_min, double f_max) const {
+    size_t nperseg, size_t noverlap, double f_min, double f_max,
+    signal::window_kind window) const {
     const double fs = require_samplerate() * 1e6;
     std::vector<float> out;
     out.reserve(num_samples());
     for (size_t i = 0; i < cube_shapes_.size(); ++i) {
         auto rows = cube_valid_rows(static_cast<std::int32_t>(i));
-        auto peaks =
-            signal::stft_peaks(rows, fs, nperseg, noverlap, f_min, f_max);
+        auto peaks = signal::stft_peaks(rows, fs, nperseg, noverlap, f_min,
+                                        f_max, window);
         out.insert(out.end(), peaks.peak_time.begin(), peaks.peak_time.end());
+    }
+    return out;
+}
+
+signal::spectrogram_features_result sam_dataset::spectrogram_features(
+    const signal::spectrogram_feature_options& options,
+    std::optional<double> fs_mhz) const {
+    double fs = 0.0;
+    if (fs_mhz.has_value()) {
+        if (!(*fs_mhz > 0.0) || !std::isfinite(*fs_mhz)) {
+            throw std::invalid_argument(
+                "spectrogram_features: fs_mhz must be finite and positive.");
+        }
+        for (size_t i = 0; i < cube_samplerates_.size(); ++i) {
+            const double a = cube_samplerates_[i];
+            const double b = *fs_mhz;
+            if (std::abs(a - b) > 1e-9 * std::max(1.0, std::abs(a))) {
+                throw std::invalid_argument(
+                    "spectrogram_features: fs_mhz=" + std::to_string(b) +
+                    " contradicts cube " + std::to_string(i) +
+                    " samplerate " + std::to_string(a) + " MHz.");
+            }
+        }
+        fs = *fs_mhz;
+    } else {
+        fs = require_samplerate();
+    }
+
+    const auto min_valid_it =
+        std::min_element(valid_scanlens_.begin(), valid_scanlens_.end());
+    const auto max_valid_it =
+        std::max_element(valid_scanlens_.begin(), valid_scanlens_.end());
+    if (min_valid_it == valid_scanlens_.end() ||
+        *min_valid_it != *max_valid_it) {
+        throw std::invalid_argument(
+            "Dataset spectrogram_features requires a common valid length "
+            "across cubes.");
+    }
+
+    signal::spectrogram_features_result out;
+    size_t row = 0;
+    for (size_t i = 0; i < cube_shapes_.size(); ++i) {
+        auto rows = cube_valid_rows(static_cast<std::int32_t>(i));
+        auto part =
+            signal::spectrogram_features(rows, fs * 1e6, options);
+        if (i == 0) {
+            out.f = part.f;
+            out.t = part.t;
+            out.features =
+                array2d<float>(num_samples(), out.f.size() * out.t.size());
+        } else if (part.f != out.f || part.t.size() != out.t.size()) {
+            throw std::invalid_argument(
+                "Dataset spectrogram_features cubes produced incompatible "
+                "frequency/time axes.");
+        }
+        for (size_t r = 0; r < part.features.rows(); ++r, ++row) {
+            std::copy(part.features[r].begin(), part.features[r].end(),
+                      out.features[row].begin());
+        }
     }
     return out;
 }

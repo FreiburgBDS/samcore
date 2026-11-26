@@ -24,7 +24,8 @@ _STFT = Tuple[NDArray[np.float32], NDArray[np.float32], NDArray[np.complex64]]
 
 def compute_stft(self: SAMScan, nperseg: int = 256,
                  noverlap: int = 128, f_min: float = 0.0,
-                 f_max: float = 0.0, absolute: bool = True) -> _STFT:
+                 f_max: float = 0.0, absolute: bool = True,
+                 window: str = "hann") -> _STFT:
     """Compute the one-sided Short-Time Fourier Transform (STFT) of every A-scan.
 
     SAM data is real-valued and single-channel, so a one-sided (real) STFT
@@ -47,6 +48,9 @@ def compute_stft(self: SAMScan, nperseg: int = 256,
         :meth:`power_spectrogram` and :meth:`stft_peak_time`.  The frame
         axis is shared by all A-scans, so per-scan gated starts are not
         folded in; the absolute origin is always ``time()[0]`` (tzero).
+    window : str, optional
+        Periodic analysis window: ``'hann'`` (default), ``'hamming'`` or
+        ``'cosine'``.
 
     Returns
     -------
@@ -66,7 +70,7 @@ def compute_stft(self: SAMScan, nperseg: int = 256,
         raise ValueError(
             "nperseg cannot be greater than the length of the signals.")
     return self._compute_stft(nperseg, noverlap, float(f_min), float(f_max),  # type: ignore[attr-defined]
-                              absolute)
+                              absolute, window)
 
 
 def downsample(self: SAMScan, factor: int, mode: str = "decimate",

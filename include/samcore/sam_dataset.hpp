@@ -199,32 +199,48 @@ public:
     // the start of each signal; the dataset stores no tzero.
     [[nodiscard]] signal::stft_result compute_stft(
         size_t nperseg = 256, size_t noverlap = 128, double f_min = 0.0,
-        double f_max = 0.0) const;
+        double f_max = 0.0,
+        signal::window_kind window = signal::window_kind::hann) const;
     [[nodiscard]] std::vector<signal::stft_result> compute_stft_by_cube(
         size_t nperseg = 256, size_t noverlap = 128, double f_min = 0.0,
-        double f_max = 0.0) const;
+        double f_max = 0.0,
+        signal::window_kind window = signal::window_kind::hann) const;
     // Welch PSD of all rows.  Different valid lengths are allowed.
     [[nodiscard]] signal::psd_result psd(
         size_t nperseg = 256, size_t noverlap = 128, double f_min = 0.0,
-        double f_max = 0.0) const;
+        double f_max = 0.0,
+        signal::window_kind window = signal::window_kind::hann) const;
     [[nodiscard]] std::vector<signal::psd_result> psd_by_cube(
         size_t nperseg = 256, size_t noverlap = 128, double f_min = 0.0,
-        double f_max = 0.0) const;
+        double f_max = 0.0,
+        signal::window_kind window = signal::window_kind::hann) const;
     // Power spectrogram of all rows; same constraints as compute_stft().
     [[nodiscard]] signal::spectrogram_result power_spectrogram(
         size_t nperseg = 256, size_t noverlap = 128, double f_min = 0.0,
-        double f_max = 0.0) const;
+        double f_max = 0.0,
+        signal::window_kind window = signal::window_kind::hann) const;
     [[nodiscard]] std::vector<signal::spectrogram_result>
     power_spectrogram_by_cube(size_t nperseg = 256, size_t noverlap = 128,
-                              double f_min = 0.0, double f_max = 0.0) const;
+                              double f_min = 0.0, double f_max = 0.0,
+                              signal::window_kind window =
+                                  signal::window_kind::hann) const;
     // Per-row STFT peak frequency/time.  Times are relative to each row's
     // signal start.
     [[nodiscard]] std::vector<float> stft_peak_frequency(
         size_t nperseg = 256, size_t noverlap = 128, double f_min = 0.0,
-        double f_max = 0.0) const;
+        double f_max = 0.0,
+        signal::window_kind window = signal::window_kind::hann) const;
     [[nodiscard]] std::vector<float> stft_peak_time(
         size_t nperseg = 256, size_t noverlap = 128, double f_min = 0.0,
-        double f_max = 0.0) const;
+        double f_max = 0.0,
+        signal::window_kind window = signal::window_kind::hann) const;
+    // Flattened, optionally L1-normalized spectrogram features over all rows.
+    // Requires a common valid length across cubes.  `fs_mhz` overrides the
+    // stored sampling rate (useful for legacy files) and must agree with it
+    // when metadata is present.
+    [[nodiscard]] signal::spectrogram_features_result spectrogram_features(
+        const signal::spectrogram_feature_options& options = {},
+        std::optional<double> fs_mhz = std::nullopt) const;
     // One-sided FFT magnitude of all rows.  Requires a common sampling rate
     // and common valid length (use spectrum_by_cube otherwise).
     [[nodiscard]] signal::spectrum_result spectrum() const;

@@ -141,17 +141,37 @@ std::vector<double> irfft(std::span<const std::complex<double>> X, size_t n) {
     return out;
 }
 
-std::vector<double> hann_window(size_t n) {
+std::vector<double> make_window(window_kind kind, size_t n) {
+    if (n == 0) return {};
+    if (n == 1) return {1.0};
     std::vector<double> w(n);
     for (size_t k = 0; k < n; ++k) {
-        w[k] = 0.5 - 0.5 * std::cos(2.0 * PI * static_cast<double>(k) /
-                                    static_cast<double>(n));
+        const double phase =
+            2.0 * PI * static_cast<double>(k) / static_cast<double>(n);
+        switch (kind) {
+        case window_kind::hann:
+            w[k] = 0.5 - 0.5 * std::cos(phase);
+            break;
+        case window_kind::hamming:
+            w[k] = 0.54 - 0.46 * std::cos(phase);
+            break;
+        case window_kind::cosine:
+            w[k] = std::sin(
+                PI * (static_cast<double>(k) + 0.5) /
+                (static_cast<double>(n) + 1.0));
+            break;
+        }
     }
     return w;
 }
 
+std::vector<double> hann_window(size_t n) {
+    return make_window(window_kind::hann, n);
+}
+
 stft_result stft(const array2d<float>& data, double fs, size_t nperseg,
-                 size_t noverlap, double f_min, double f_max) {
+                 size_t noverlap, double f_min, double f_max,
+                 window_kind window) {
     if (nperseg < 1 || noverlap >= nperseg) {
         throw std::invalid_argument("stft: invalid nperseg/noverlap");
     }
@@ -167,7 +187,7 @@ stft_result stft(const array2d<float>& data, double fs, size_t nperseg,
     const size_t k0 = band.first;
     const size_t k1 = band.second;
     const size_t nkept = k1 - k0;
-    const auto win_d = hann_window(nperseg);
+    const auto win_d = make_window(window, nperseg);
     std::vector<float> win(win_d.begin(), win_d.end());
     float win_sum = 0.0f;
     for (float w : win) win_sum += w;
@@ -204,7 +224,8 @@ stft_result stft(const array2d<float>& data, double fs, size_t nperseg,
 }
 
 psd_result welch_psd(const array2d<float>& data, double fs, size_t nperseg,
-                     size_t noverlap, double f_min, double f_max) {
+                     size_t noverlap, double f_min, double f_max,
+                     window_kind window) {
     if (nperseg < 1 || noverlap >= nperseg) {
         throw std::invalid_argument("welch_psd: invalid nperseg/noverlap");
     }
@@ -220,7 +241,7 @@ psd_result welch_psd(const array2d<float>& data, double fs, size_t nperseg,
     const size_t k0 = band.first;
     const size_t k1 = band.second;
     const size_t nkept = k1 - k0;
-    const auto win_d = hann_window(nperseg);
+    const auto win_d = make_window(window, nperseg);
     std::vector<float> win(win_d.begin(), win_d.end());
     float win2_sum = 0.0f;
     for (float w : win) win2_sum += w * w;
@@ -265,7 +286,8 @@ psd_result welch_psd(const array2d<float>& data, double fs, size_t nperseg,
 
 spectrogram_result spectrogram_psd(const array2d<float>& data, double fs,
                                    size_t nperseg, size_t noverlap,
-                                   double f_min, double f_max) {
+                                   double f_min, double f_max,
+                                   window_kind window) {
     if (nperseg < 1 || noverlap >= nperseg) {
         throw std::invalid_argument("spectrogram_psd: invalid nperseg/noverlap");
     }
@@ -281,7 +303,7 @@ spectrogram_result spectrogram_psd(const array2d<float>& data, double fs,
     const size_t k0 = band.first;
     const size_t k1 = band.second;
     const size_t nkept = k1 - k0;
-    const auto win_d = hann_window(nperseg);
+    const auto win_d = make_window(window, nperseg);
     std::vector<float> win(win_d.begin(), win_d.end());
     float win2_sum = 0.0f;
     for (float w : win) win2_sum += w * w;
@@ -319,9 +341,78 @@ spectrogram_result spectrogram_psd(const array2d<float>& data, double fs,
     return result;
 }
 
+spectrogram_features_result spectrogram_features(
+    const array2d<float>& data, double fs,
+    const spectrogram_feature_options& options) {
+    if (!(fs > 0.0) || !std::isfinite(fs)) {
+        throw std::invalid_argument(
+            "spectrogram_features: fs must be finite and positive.");
+    }
+    const auto spec = spectrogram_psd(
+        data, fs, options.nperseg, options.noverlap, options.f_min,
+        options.f_max, options.window);
+
+    spectrogram_features_result result;
+    result.t.assign(spec.t.begin(), spec.t.end());
+    const size_t nkept = spec.f.size();
+    const size_t nframes = spec.t.size();
+    const size_t nfreqs = options.nperseg / 2 + 1;
+    std::vector<double> all_f(nfreqs);
+    for (size_t k = 0; k < nfreqs; ++k) {
+        all_f[k] = static_cast<double>(k) * fs /
+                   static_cast<double>(options.nperseg);
+    }
+    size_t k0 = 0;
+    if (!spec.f.empty()) {
+        const auto it = std::lower_bound(all_f.begin(), all_f.end(),
+                                         static_cast<double>(spec.f.front()));
+        k0 = static_cast<size_t>(it - all_f.begin());
+        if (k0 == all_f.size()) --k0;
+        if (k0 > 0 &&
+            std::abs(all_f[k0 - 1] - spec.f.front()) <
+                std::abs(all_f[k0] - spec.f.front())) {
+            --k0;
+        }
+    }
+    result.f.assign(all_f.begin() + static_cast<std::ptrdiff_t>(k0),
+                    all_f.begin() + static_cast<std::ptrdiff_t>(k0 + nkept));
+    const size_t step = options.nperseg - options.noverlap;
+    const double start = static_cast<double>(options.nperseg) / 2.0;
+    for (size_t i = 0; i < nframes; ++i) {
+        result.t[i] = (start + static_cast<double>(i * step)) / fs;
+    }
+    const size_t width = nkept * nframes;
+    result.features = array2d<float>(data.rows(), width);
+
+    // spectrogram_psd stores rows as (frequency-major, frame-minor), which is
+    // exactly scipy's Sxx[:, kept_bins, :].reshape(n_signals, -1) order.
+    for (size_t i = 0; i < data.rows(); ++i) {
+        std::copy_n(spec.sxx.flat().data() + i * width, width,
+                    result.features[i].data());
+        if (options.l1_normalize) {
+            double sum = 0.0;
+            for (float v : result.features[i]) sum += v;
+            if (sum != 0.0) {
+                const float denom = static_cast<float>(sum + 1e-12);
+                float* largest = &result.features[i][0];
+                for (float& v : result.features[i]) {
+                    v /= denom;
+                    if (v > *largest) largest = &v;
+                }
+                // Cancel float32 accumulation drift so each nonzero row sums
+                // to 1 within 1e-6 (the pipeline's documented invariant).
+                double normalized_sum = 0.0;
+                for (float v : result.features[i]) normalized_sum += v;
+                *largest += static_cast<float>(1.0 - normalized_sum);
+            }
+        }
+    }
+    return result;
+}
+
 stft_peaks_result stft_peaks(const array2d<float>& data, double fs,
                              size_t nperseg, size_t noverlap, double f_min,
-                             double f_max) {
+                             double f_max, window_kind window) {
     if (nperseg < 1 || noverlap >= nperseg) {
         throw std::invalid_argument("stft_peaks: invalid nperseg/noverlap");
     }
@@ -338,7 +429,7 @@ stft_peaks_result stft_peaks(const array2d<float>& data, double fs,
     const size_t k1 = band.second;
     const size_t nkept = k1 - k0;
     const auto times = frame_times(n, nperseg, step, fs);
-    const auto win_d = hann_window(nperseg);
+    const auto win_d = make_window(window, nperseg);
     std::vector<float> win(win_d.begin(), win_d.end());
 
     stft_peaks_result result;
