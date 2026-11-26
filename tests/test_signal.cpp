@@ -286,3 +286,21 @@ TEST(signal, XcorrLagValidation) {
     EXPECT_EQ(xcorr_lag(ref, ref, 1000), 0);
 }
 
+TEST(signal, XcorrLagFloatMatchesInt8) {
+    std::vector<std::int8_t> ref_i8(128);
+    std::vector<float> ref_f(128);
+    for (size_t i = 0; i < ref_i8.size(); ++i) {
+        ref_i8[i] = static_cast<std::int8_t>(
+            static_cast<int>((i * 29 + 7) % 180) - 90);
+        ref_f[i] = static_cast<float>(ref_i8[i]);
+    }
+    std::vector<std::int8_t> x_i8(128, 0);
+    std::vector<float> x_f(128, 0.0f);
+    for (std::int64_t i = 11; i < 128; ++i) {
+        x_i8[static_cast<size_t>(i)] = ref_i8[static_cast<size_t>(i - 11)];
+        x_f[static_cast<size_t>(i)] = ref_f[static_cast<size_t>(i - 11)];
+    }
+    EXPECT_EQ(xcorr_lag(x_f, ref_f, 30), xcorr_lag(x_i8, ref_i8, 30));
+    EXPECT_EQ(xcorr_lag(x_f, ref_f, 30), 11);
+}
+

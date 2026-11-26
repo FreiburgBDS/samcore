@@ -10,10 +10,10 @@ from conftest import H5_PATH, H5SAMD_PATH, needs_data, needs_h5samd
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 
-def _make_header(n_signals, scanlen, cols=1):
+def _make_header(n_signals, scanlen, cols=1, samplerate=1000.0, tzero=0):
     """Build a minimal SAMHeader for testing (samcore has no version field)."""
     return SAMHeader(scanspline=cols, nlines=n_signals // cols,
-                     scanlen=scanlen, samplerate=1000.0, tzero=0,
+                     scanlen=scanlen, samplerate=samplerate, tzero=tzero,
                      resolution=1.0)
 
 
@@ -126,14 +126,73 @@ class TestConstruction:
         with pytest.raises(ValueError, match="at least one"):
             SAMDataset([])
 
+    def test_unknown_merge_raises(self, single_handler):
+        with pytest.raises(ValueError, match="Unknown merge policy"):
+            SAMDataset(single_handler, merge="bogus")
+
     def test_padding_applied(self):
         d1 = np.random.default_rng(0).integers(-128, 127, size=(5, 50)).astype(np.int8)
         d2 = np.random.default_rng(1).integers(-128, 127, size=(5, 100)).astype(np.int8)
         h1 = SAMScan.handler_from_data(d1, _make_header(5, 50))
         h2 = SAMScan.handler_from_data(d2, _make_header(5, 100))
-        ds = SAMDataset([h1, h2], pad_value=-1.0)
+        ds = SAMDataset([h1, h2], pad_value=-1.0, merge="pad")
         assert ds.X.shape == (10, 100)
         assert np.all(ds.X[:5, 50:] == -1.0)
+        assert ds.merge_mode == "pad"
+        assert ds.valid_scanlens == [50, 100]
+
+    def test_crop_is_default(self):
+        d1 = np.random.default_rng(0).integers(-128, 127, size=(5, 50)).astype(np.int8)
+        d2 = np.random.default_rng(1).integers(-128, 127, size=(5, 100)).astype(np.int8)
+        h1 = SAMScan.handler_from_data(d1, _make_header(5, 50))
+        h2 = SAMScan.handler_from_data(d2, _make_header(5, 100))
+        ds = SAMDataset([h1, h2], pad_value=-1.0)
+        assert ds.X.shape == (10, 50)
+        assert ds.merge_mode == "crop"
+        assert ds.scanlens == [50, 100]
+        assert ds.valid_scanlens == [50, 50]
+        np.testing.assert_array_equal(ds.X[:5], d1)
+        np.testing.assert_array_equal(ds.X[5:], d2[:, :50])
+
+    def test_zgate_merge(self):
+        d1 = np.zeros((3, 50), dtype=np.int8)
+        d1[:, 10] = 100
+        d2 = np.zeros((3, 80), dtype=np.int8)
+        d2[:, 20] = 100
+        h1 = SAMScan.handler_from_data(d1, _make_header(3, 50))
+        h2 = SAMScan.handler_from_data(d2, _make_header(3, 80))
+        ds = SAMDataset([h1, h2], merge="zgate", threshold=0.5,
+                        zgate_length=10, unsupervised=True)
+        assert ds.X.shape == (6, 10)
+        for row in ds.X:
+            assert row[0] == 100
+        assert ds.valid_scanlens == [10, 10]
+
+    def test_zgate_merge_defaults_to_2000(self):
+        data = np.zeros((2, 2500), dtype=np.int8)
+        data[:, 100] = 100
+        h = SAMScan.handler_from_data(data, _make_header(2, 2500))
+        ds = SAMDataset([h], merge="zgate", unsupervised=True)
+        assert ds.X.shape == (2, 2000)
+        assert np.all(ds.X[:, 0] == 100)
+
+    def test_xcorr_merge_spans_cubes(self):
+        tmpl = np.random.default_rng(3).integers(
+            -100, 100, size=200).astype(np.int8)
+        a = np.zeros((1, 200), dtype=np.int8)
+        b = np.zeros((1, 200), dtype=np.int8)
+        c = np.zeros((1, 200), dtype=np.int8)
+        a[0] = tmpl
+        b[0, 7:] = tmpl[:-7]
+        c[0, :-4] = tmpl[4:]
+        h1 = SAMScan.handler_from_data(a, _make_header(1, 200))
+        h2 = SAMScan.handler_from_data(
+            np.concatenate([b, c]), _make_header(2, 200))
+        ds = SAMDataset([h1, h2], merge="xcorr", max_shift=30,
+                        unsupervised=True)
+        assert ds.X.shape == (3, 189)
+        for row in ds.X:
+            np.testing.assert_array_equal(row, ds.X[0])
 
     def test_float32_enforced(self, single_handler):
         handlers = single_handler
@@ -176,6 +235,272 @@ class TestConstruction:
         assert c.pad_value == ds.pad_value
         assert c.cube_shapes == ds.cube_shapes
         assert c.cube_resolutions == ds.cube_resolutions
+
+
+# ── alignment across the whole dataset ──────────────────────────────────────
+
+class TestDatasetAlignment:
+    @staticmethod
+    def _scan(n, seed):
+        data = np.random.default_rng(seed).integers(
+            -100, 100, size=(2, n)).astype(np.int8)
+        return SAMScan.handler_from_data(data, _make_header(2, n))
+
+    @staticmethod
+    def _shifted_pair():
+        tmpl = np.random.default_rng(11).integers(
+            -100, 100, size=200).astype(np.int8)
+        data0 = np.zeros((1, 200), dtype=np.int8)
+        data1 = np.zeros((1, 200), dtype=np.int8)
+        data0[0] = tmpl
+        data1[0, 9:] = tmpl[:-9]
+        labels = SAMLabels(np.zeros(1, dtype=np.int8), ["healthy"])
+        h0 = SAMScan.handler_from_data(data0, _make_header(1, 200),
+                                       samlabels=labels)
+        h1 = SAMScan.handler_from_data(data1, _make_header(1, 200),
+                                       samlabels=labels)
+        return h0, h1
+
+    def test_manual_copy_and_in_place(self):
+        ds = SAMDataset(self._shifted_pair(), unsupervised=True)
+        ds.Z = np.ones((2, 3), dtype=np.float32)
+        ds.V = np.ones((2, 2), dtype=np.float32)
+        aligned = ds.align_manual(np.array([0, 9], dtype=np.int32), 150)
+        assert aligned is not ds
+        assert aligned.X.shape == (2, 150)
+        assert ds.X.shape == (2, 200)
+        np.testing.assert_array_equal(aligned.X[1], ds.X[0, :150])
+        assert aligned.Z is None and aligned.V is None
+        assert ds.Z is not None and ds.V is not None
+
+        ds.align_manual(np.array([0, 9], dtype=np.int32), 150,
+                        in_place=True)
+        assert ds.X.shape == (2, 150)
+        np.testing.assert_array_equal(ds.X[1], ds.X[0])
+
+    def test_manual_unaligned_zero_fill(self):
+        ds = SAMDataset(self._shifted_pair(), unsupervised=True)
+        aligned = ds.align_manual(np.array([0, -1], dtype=np.int32), 100)
+        assert np.all(aligned.X[1] == 0.0)
+
+    def test_xcorr_global_and_non_mutating(self):
+        ds = SAMDataset(self._shifted_pair(), unsupervised=True)
+        aligned = ds.align_xcorr(max_shift=30)
+        assert ds.X.shape == (2, 200)
+        assert aligned.X.shape == (2, 191)
+        np.testing.assert_array_equal(aligned.X[1], aligned.X[0])
+
+    def test_zgate_uses_dataset_rows(self):
+        data = np.zeros((2, 200), dtype=np.int8)
+        data[0, 150] = 100
+        data[1, 20] = 100
+        h = SAMScan.handler_from_data(data, _make_header(2, 200))
+        ds = SAMDataset([h], unsupervised=True)
+        aligned = ds.align_zgate(0.5, 20)
+        assert aligned.X.shape == (2, 20)
+        assert aligned.X[0, 0] == 100
+        assert aligned.X[1, 0] == 100
+
+    def test_tof_alignment_requires_samplerate(self):
+        n = 400
+        j = np.arange(n)
+        data = np.zeros((2, n), dtype=np.int8)
+        for row, center in enumerate((100, 130)):
+            t = j.astype(float) - center
+            burst = 100 * np.exp(-0.5 * (t / 8.0) ** 2) * \
+                np.sin(2 * np.pi * 0.2 * t)
+            data[row] = np.clip(np.round(burst), -128, 127).astype(np.int8)
+        h = SAMScan.handler_from_data(data, _make_header(2, n, samplerate=100.0))
+        ds = SAMDataset([h], unsupervised=True)
+        aligned = ds.align_tof(2500.0)
+        assert aligned.X.shape[1] < 400
+        overlap = slice(40, aligned.X.shape[1] - 40)
+        np.testing.assert_allclose(aligned.X[1, overlap],
+                                   aligned.X[0, overlap], atol=1)
+
+    def test_preserves_labels_provenance_and_splits(self):
+        ds = SAMDataset(self._shifted_pair())
+        ds.train_test_split(test_size=0.5, shuffle=False)
+        before_spatial = ds.spatial.copy()
+        before_train = ds.train_indices.copy()
+        aligned = ds.align_xcorr(max_shift=30)
+        np.testing.assert_array_equal(aligned.spatial, before_spatial)
+        np.testing.assert_array_equal(aligned.train_indices, before_train)
+        np.testing.assert_array_equal(aligned.labels.labels,
+                                      ds.labels.labels)
+
+    def test_padding_does_not_participate_in_alignment(self):
+        short = self._scan(n=64, seed=20)
+        long = self._scan(n=128, seed=21)
+        padded = SAMDataset([short, long], merge="pad", pad_value=127,
+                            unsupervised=True)
+        cropped = SAMDataset([short, long], merge="crop",
+                             unsupervised=True)
+        a = padded.align_xcorr(max_shift=16)
+        b = cropped.align_xcorr(max_shift=16)
+        assert a.X.shape[1] >= b.X.shape[1]
+        np.testing.assert_array_equal(
+            a.X[:, :b.X.shape[1]], b.X)
+
+    def test_zgate_ignores_padding(self):
+        d0 = np.zeros((1, 64), dtype=np.int8)
+        d1 = np.zeros((1, 128), dtype=np.int8)
+        d0[0, 10] = 100
+        d1[0, 20] = 100
+        h0 = SAMScan.handler_from_data(d0, _make_header(1, 64))
+        h1 = SAMScan.handler_from_data(d1, _make_header(1, 128))
+        ds = SAMDataset([h0, h1], merge="pad", pad_value=127,
+                        unsupervised=True)
+        aligned = ds.align_zgate(0.5, 10)
+        assert aligned.X[0, 0] == 100
+        assert aligned.X[1, 0] == 100
+
+    def test_padded_manual_rejects_invalid_length(self):
+        short = self._scan(n=64, seed=20)
+        long = self._scan(n=128, seed=21)
+        ds = SAMDataset([short, long], merge="pad", unsupervised=True)
+        with pytest.raises(ValueError, match="valid signal length"):
+            ds.align_manual(np.zeros(ds.num_samples, dtype=np.int32), 65)
+
+    def test_padded_tof_requires_uniform_valid_length(self):
+        short = self._scan(n=64, seed=20)
+        long = self._scan(n=128, seed=21)
+        ds = SAMDataset([short, long], merge="pad", unsupervised=True)
+        with pytest.raises(ValueError, match="same valid signal length"):
+            ds.align_tof(100.0)
+
+
+# ── dataset-level spectral APIs ──────────────────────────────────────────────
+
+class TestDatasetSpectral:
+    @staticmethod
+    def _scan(n=128, rows=2, seed=0, samplerate=100.0):
+        data = np.random.default_rng(seed).integers(
+            -100, 100, size=(rows, n)).astype(np.int8)
+        return SAMScan.handler_from_data(
+            data, _make_header(rows, n, samplerate=samplerate))
+
+    def test_single_cube_matches_scan(self):
+        scan = self._scan()
+        ds = SAMDataset([scan], unsupervised=True)
+        assert ds.samplerate == 100.0
+        assert ds.cube_samplerates == [100.0]
+
+        f, psd = ds.psd(nperseg=32, noverlap=16)
+        sf, spsd = scan.psd(nperseg=32, noverlap=16)
+        np.testing.assert_array_equal(f, sf)
+        np.testing.assert_array_equal(psd, spsd)
+
+        f, t, zxx = ds.compute_stft(nperseg=32, noverlap=16)
+        sf, st, szxx = scan.compute_stft(nperseg=32, noverlap=16,
+                                        absolute=False)
+        np.testing.assert_array_equal(f, sf)
+        np.testing.assert_array_equal(t, st)
+        np.testing.assert_array_equal(zxx, szxx)
+
+        f, t, sxx = ds.power_spectrogram(nperseg=32, noverlap=16)
+        sf, st, ssxx = scan.power_spectrogram(nperseg=32, noverlap=16,
+                                             absolute=False)
+        np.testing.assert_array_equal(f, sf)
+        np.testing.assert_array_equal(t, st)
+        np.testing.assert_array_equal(sxx, ssxx)
+
+        f, mag = ds.spectrum()
+        sf, smag = scan.spectrum()
+        np.testing.assert_array_equal(f, sf)
+        np.testing.assert_array_equal(mag, smag)
+
+        np.testing.assert_array_equal(
+            ds.stft_peak_frequency(nperseg=32, noverlap=16),
+            scan.stft_peak_frequency(nperseg=32, noverlap=16).ravel())
+        np.testing.assert_array_equal(
+            ds.stft_peak_time(nperseg=32, noverlap=16),
+            scan.stft_peak_time(nperseg=32, noverlap=16,
+                                absolute=False).ravel())
+
+    def test_multi_cube_concatenates_in_row_order(self):
+        s0 = self._scan(seed=1)
+        s1 = self._scan(seed=2)
+        ds = SAMDataset([s0, s1], unsupervised=True)
+        f, psd = ds.psd(nperseg=32, noverlap=16)
+        f0, p0 = s0.psd(nperseg=32, noverlap=16)
+        f1, p1 = s1.psd(nperseg=32, noverlap=16)
+        np.testing.assert_array_equal(f, f0)
+        np.testing.assert_array_equal(f, f1)
+        np.testing.assert_array_equal(psd, np.vstack([p0, p1]))
+
+        parts = ds.psd_by_cube(nperseg=32, noverlap=16)
+        assert len(parts) == 2
+        np.testing.assert_array_equal(parts[0][1], p0)
+        np.testing.assert_array_equal(parts[1][1], p1)
+
+    def test_padding_is_excluded_from_spectra(self):
+        short = self._scan(n=64, seed=3)
+        long = self._scan(n=128, seed=4)
+        ds = SAMDataset([short, long], merge="pad", pad_value=-99,
+                        unsupervised=True)
+        assert ds.valid_scanlens == [64, 128]
+
+        f, psd = ds.psd(nperseg=32, noverlap=16)
+        sf, spsd = short.psd(nperseg=32, noverlap=16)
+        np.testing.assert_array_equal(f, sf)
+        np.testing.assert_array_equal(psd[:2], spsd)
+
+        alone = SAMDataset([short], unsupervised=True)
+        _, short_psd = alone.psd(nperseg=32, noverlap=16)
+        np.testing.assert_array_equal(psd[:2], short_psd)
+
+        with pytest.raises(ValueError, match="common valid length"):
+            ds.spectrum()
+        parts = ds.spectrum_by_cube()
+        assert [m.shape for _, m in parts] == [(2, 33), (2, 65)]
+
+    def test_ragged_stft_requires_by_cube(self):
+        short = self._scan(n=64, seed=3)
+        long = self._scan(n=128, seed=4)
+        ds = SAMDataset([short, long], merge="pad", unsupervised=True)
+        with pytest.raises(ValueError, match="common valid length"):
+            ds.compute_stft(nperseg=32, noverlap=16)
+        parts = ds.compute_stft_by_cube(nperseg=32, noverlap=16)
+        assert len(parts) == 2
+        assert parts[0][2].shape[0] == 2
+        assert parts[1][2].shape[0] == 2
+
+    def test_mixed_samplerate_rejected(self):
+        s0 = self._scan(seed=1, samplerate=100.0)
+        s1 = self._scan(seed=2, samplerate=200.0)
+        ds = SAMDataset([s0, s1], unsupervised=True)
+        assert ds.samplerate is None
+        assert ds.cube_samplerates == [100.0, 200.0]
+        with pytest.raises(ValueError, match="uniform samplerate"):
+            ds.psd(nperseg=32, noverlap=16)
+
+    def test_gate_updates_valid_lengths(self):
+        ds = SAMDataset([self._scan(n=128)], unsupervised=True)
+        assert ds.valid_scanlens == [128]
+        ds.preprocess("gate", start=16, end=80)
+        assert ds.maxlen == 64
+        assert ds.scanlens == [128]
+        assert ds.valid_scanlens == [64]
+        _, psd = ds.psd(nperseg=32, noverlap=16)
+        assert psd.shape == (2, 17)
+
+    def test_metadata_survives_eager_and_lazy_load(self, tmp_path):
+        short = self._scan(n=64, seed=3)
+        long = self._scan(n=128, seed=4)
+        ds = SAMDataset([short, long], merge="pad", pad_value=-7,
+                        unsupervised=True)
+        path = str(tmp_path / "meta.h5samd")
+        ds.save(path)
+        for lazy in (False, True):
+            loaded = SAMDataset.load(path, lazy=lazy)
+            assert loaded.merge_mode == "pad"
+            assert loaded.pad_value == -7
+            assert loaded.samplerate == 100.0
+            assert loaded.cube_samplerates == [100.0, 100.0]
+            assert loaded.valid_scanlens == [64, 128]
+            assert loaded.loaded is (not lazy)
+            np.testing.assert_array_equal(loaded.X, ds.X)
 
 
 # ── preprocess ───────────────────────────────────────────────────────────────
@@ -1511,10 +1836,79 @@ class TestConvertFromPaths:
 
         out = str(tmp_path / "conv_pad.h5samd")
         SAMDataset.convert_from_paths([h5_path, short_path], out,
-                                      pad_value=-1.0, unsupervised=True)
+                                      pad_value=-1.0, merge="pad",
+                                      unsupervised=True)
         ds = SAMDataset.load(out)
         maxlen = max(h.scanlen, 50)
         assert ds.X.shape[1] == maxlen
+        assert ds.merge_mode == "pad"
+        assert ds.valid_scanlens == [h.scanlen, 50]
+        assert np.all(ds.X[h.data.shape[0]:, 50:] == -1.0)
+
+    def test_default_crop_matches_inline(self, tmp_path):
+        d1 = np.random.default_rng(10).integers(
+            -128, 127, size=(3, 100)).astype(np.int8)
+        d2 = np.random.default_rng(11).integers(
+            -128, 127, size=(3, 80)).astype(np.int8)
+        h1 = SAMScan.handler_from_data(d1, _make_header(3, 100))
+        h2 = SAMScan.handler_from_data(d2, _make_header(3, 80))
+        p1, p2 = str(tmp_path / "a.h5sam"), str(tmp_path / "b.h5sam")
+        h1.to_h5sam(p1)
+        h2.to_h5sam(p2)
+
+        inline = SAMDataset([h1, h2], unsupervised=True)
+        out = str(tmp_path / "crop.h5samd")
+        SAMDataset.convert_from_paths([p1, p2], out, unsupervised=True)
+        converted = SAMDataset.load(out)
+        assert converted.merge_mode == "crop"
+        assert converted.valid_scanlens == [80, 80]
+        np.testing.assert_array_equal(converted.X, inline.X)
+        np.testing.assert_array_equal(converted.spatial, inline.spatial)
+
+    def test_zgate_converter_matches_inline(self, tmp_path):
+        d1 = np.zeros((3, 100), dtype=np.int8)
+        d2 = np.zeros((3, 80), dtype=np.int8)
+        d1[:, 10] = 100
+        d2[:, 20] = 90
+        h1 = SAMScan.handler_from_data(d1, _make_header(3, 100))
+        h2 = SAMScan.handler_from_data(d2, _make_header(3, 80))
+        p1, p2 = str(tmp_path / "z1.h5sam"), str(tmp_path / "z2.h5sam")
+        h1.to_h5sam(p1)
+        h2.to_h5sam(p2)
+
+        inline = SAMDataset([h1, h2], merge="zgate", threshold=0.5,
+                            zgate_length=20, unsupervised=True)
+        out = str(tmp_path / "zgate.h5samd")
+        SAMDataset.convert_from_paths(
+            [p1, p2], out, merge="zgate", threshold=0.5,
+            zgate_length=20, unsupervised=True)
+        converted = SAMDataset.load(out)
+        assert converted.merge_mode == "zgate"
+        np.testing.assert_array_equal(converted.X, inline.X)
+
+    def test_xcorr_converter_matches_inline(self, tmp_path):
+        tmpl = np.random.default_rng(12).integers(
+            -100, 100, size=200).astype(np.int8)
+        d1 = np.zeros((1, 200), dtype=np.int8)
+        d2 = np.zeros((1, 200), dtype=np.int8)
+        d1[0] = tmpl
+        d2[0, 7:] = tmpl[:-7]
+        h1 = SAMScan.handler_from_data(d1, _make_header(1, 200))
+        h2 = SAMScan.handler_from_data(d2, _make_header(1, 200))
+        p1, p2 = str(tmp_path / "x1.h5sam"), str(tmp_path / "x2.h5sam")
+        h1.to_h5sam(p1)
+        h2.to_h5sam(p2)
+
+        inline = SAMDataset([h1, h2], merge="xcorr", max_shift=30,
+                            unsupervised=True)
+        out = str(tmp_path / "xcorr.h5samd")
+        SAMDataset.convert_from_paths(
+            [p1, p2], out, merge="xcorr", max_shift=30,
+            unsupervised=True)
+        converted = SAMDataset.load(out)
+        assert converted.merge_mode == "xcorr"
+        assert converted.samplerate == 1000.0
+        np.testing.assert_array_equal(converted.X, inline.X)
 
     def test_with_labels(self, tmp_path):
         data = np.random.default_rng(0).integers(

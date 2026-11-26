@@ -8,9 +8,11 @@
 
 namespace samcore::signal {
 
-std::int64_t xcorr_lag(std::span<const std::int8_t> x,
-                       std::span<const std::int8_t> ref,
-                       std::int64_t max_shift) {
+namespace {
+
+template <class T>
+std::int64_t xcorr_lag_impl(std::span<const T> x, std::span<const T> ref,
+                            std::int64_t max_shift) {
     const size_t n = x.size();
     if (ref.size() != n) {
         throw std::invalid_argument("xcorr_lag: signal lengths differ");
@@ -30,8 +32,8 @@ std::int64_t xcorr_lag(std::span<const std::int8_t> x,
     std::vector<double> a(nn, 0.0), b(nn, 0.0);
     double mean_x = 0.0, mean_ref = 0.0;
     for (size_t i = 0; i < n; ++i) {
-        mean_x += x[i];
-        mean_ref += ref[i];
+        mean_x += static_cast<double>(x[i]);
+        mean_ref += static_cast<double>(ref[i]);
     }
     mean_x /= static_cast<double>(n);
     mean_ref /= static_cast<double>(n);
@@ -66,6 +68,19 @@ std::int64_t xcorr_lag(std::span<const std::int8_t> x,
         }
     }
     return best;
+}
+
+} // namespace
+
+std::int64_t xcorr_lag(std::span<const std::int8_t> x,
+                       std::span<const std::int8_t> ref,
+                       std::int64_t max_shift) {
+    return xcorr_lag_impl(x, ref, max_shift);
+}
+
+std::int64_t xcorr_lag(std::span<const float> x, std::span<const float> ref,
+                       std::int64_t max_shift) {
+    return xcorr_lag_impl(x, ref, max_shift);
 }
 
 } // namespace samcore::signal

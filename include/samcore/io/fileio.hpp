@@ -9,6 +9,7 @@
 #include <samcore/array.hpp>
 #include <samcore/sam_header.hpp>
 #include <samcore/sam_labels.hpp>
+#include <samcore/sam_merge.hpp>
 
 namespace samcore::io {
 
@@ -42,6 +43,10 @@ struct h5samd_result {
     std::vector<std::pair<std::int32_t, std::int32_t>> cube_shapes;
     std::vector<double> cube_resolutions;
     std::vector<std::int32_t> scanlens;
+    std::vector<std::int32_t> valid_scanlens;
+    std::vector<double> cube_samplerates;
+    merge_mode merge = merge_mode::pad; // legacy files were padded
+    float pad_value = 0.0f;
     bool unsupervised = false;
     std::optional<array2d<float>> z;
     std::optional<array2d<float>> v;
@@ -58,16 +63,43 @@ void write_h5samd(const std::filesystem::path& path,
                   const std::vector<std::pair<std::int32_t, std::int32_t>>& cube_shapes,
                   const std::vector<double>& cube_resolutions,
                   const std::vector<std::int32_t>& scanlens,
-                  bool unsupervised,
+                  const std::vector<std::int32_t>& valid_scanlens,
+                  const std::vector<double>& cube_samplerates,
+                  merge_mode merge, float pad_value, bool unsupervised,
                   const std::optional<array2d<float>>& z,
                   const std::optional<array2d<float>>& v);
 
+// Compatibility overload for direct low-level writers (legacy padded files).
+inline void write_h5samd(
+    const std::filesystem::path& path, const array2d<float>& x,
+    const std::optional<sam_labels>& labels,
+    const std::vector<std::pair<std::int32_t, std::int32_t>>& cube_shapes,
+    const std::vector<double>& cube_resolutions,
+    const std::vector<std::int32_t>& scanlens, bool unsupervised,
+    const std::optional<array2d<float>>& z,
+    const std::optional<array2d<float>>& v) {
+    write_h5samd(path, x, labels, cube_shapes, cube_resolutions, scanlens,
+                 scanlens, {}, merge_mode::pad, 0.0f, unsupervised, z, v);
+}
+
 // Convert multiple .h5sam files into a single .h5samd, streaming data
-// per file to bound memory usage.
+// per file to bound memory usage.  Global xcorr needs one extra signal pass
+// because the final common overlap depends on all lags.
 void convert_h5sam_to_h5samd(
     const std::vector<std::filesystem::path>& input_paths,
     const std::filesystem::path& output_path,
-    float pad_value = 0.0f,
+    const dataset_merge_options& options = {},
     std::optional<bool> unsupervised = std::nullopt);
+
+// Compatibility overload preserving the old explicit-pad calling convention.
+inline void convert_h5sam_to_h5samd(
+    const std::vector<std::filesystem::path>& input_paths,
+    const std::filesystem::path& output_path, float pad_value,
+    std::optional<bool> unsupervised = std::nullopt) {
+    dataset_merge_options options;
+    options.mode = merge_mode::pad;
+    options.pad_value = pad_value;
+    convert_h5sam_to_h5samd(input_paths, output_path, options, unsupervised);
+}
 
 } // namespace samcore::io

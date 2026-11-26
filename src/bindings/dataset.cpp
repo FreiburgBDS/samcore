@@ -2,7 +2,24 @@
 
 #include "common.hpp"
 
+#include <new>
+
 void bind_dataset(nb::module_& m) {
+    const auto make_options = [](const std::string& merge, float pad_value,
+                                 size_t reference, std::int64_t max_shift,
+                                 double max_gate_loss, double threshold,
+                                 std::int64_t zgate_length) {
+        dataset_merge_options options;
+        options.mode = merge_mode_from_string(merge);
+        options.pad_value = pad_value;
+        options.reference = reference;
+        options.max_shift = max_shift;
+        options.max_gate_loss = max_gate_loss;
+        options.threshold = threshold;
+        options.zgate_length = zgate_length;
+        return options;
+    };
+
     // SAMDataset
 
 nb::class_<sam_dataset>(m, "SAMDataset", nb::dynamic_attr(),
@@ -10,16 +27,17 @@ nb::class_<sam_dataset>(m, "SAMDataset", nb::dynamic_attr(),
                                    "scan cubes, ready for batching, "
                                    "splitting, preprocessing and supervised "
                                    "or unsupervised learning.\n\n"
-                                   "Signals are padded to a common length, "
-                                   "spatial provenance is tracked per row, "
-                                   "and labels are merged across cubes.  The "
-                                   "dataset serializes as a single .h5samd "
-                                   "file.\n\n"
+                                   "Signals are combined to a common length "
+                                   "using ``merge='crop'`` (default), ``'pad'``, "
+                                   "``'xcorr'`` or ``'zgate'``; spatial provenance "
+                                   "is tracked per row, and labels are merged "
+                                   "across cubes.  The dataset serializes as a "
+                                   "single .h5samd file.\n\n"
                                    "Attributes\n"
                                    "----------\n"
                                    "X : ndarray (float32)\n"
-                                   "    Padded and concatenated signals of "
-                                   "shape (num_samples, max_scanlen).\n"
+                                   "    Merged and concatenated signals of "
+                                   "shape (num_samples, common_length).\n"
                                    "spatial : recarray\n"
                                    "    Structured array with fields ``idx`` "
                                    "(source cube), ``x`` (column position in "
@@ -45,9 +63,27 @@ nb::class_<sam_dataset>(m, "SAMDataset", nb::dynamic_attr(),
                                    "``scanlens`` in samples; preprocessing "
                                    "``cutoff``/``fs`` share one frequency "
                                    "unit (MHz to match the header).")
-        .def(nb::init<std::vector<sam_scan>, float, std::optional<bool>>(),
+        .def("__init__", [make_options](sam_dataset* self,
+                std::vector<sam_scan> handlers, float pad_value,
+                std::optional<bool> unsupervised, const std::string& merge,
+                size_t reference, std::optional<std::int64_t> max_shift,
+                double max_gate_loss, double threshold,
+                std::int64_t zgate_length) {
+                 const auto options = make_options(
+                     merge, pad_value, reference, max_shift.value_or(0),
+                     max_gate_loss, threshold, zgate_length);
+                 auto built = without_gil([&] {
+                     return sam_dataset(std::move(handlers), options,
+                                        unsupervised);
+                 });
+                 new (self) sam_dataset(std::move(built));
+             },
              nb::arg("handlers"), nb::arg("pad_value") = 0.0f,
              nb::arg("unsupervised") = nb::none(),
+             nb::arg("merge") = "crop", nb::arg("reference") = 0,
+             nb::arg("max_shift") = nb::none(),
+             nb::arg("max_gate_loss") = 1.0, nb::arg("threshold") = 0.2,
+             nb::arg("zgate_length") = 2000,
              "Build a dataset from a list of scans.\n\n"
                      "Parameters\n"
                      "----------\n"
@@ -55,12 +91,31 @@ nb::class_<sam_dataset>(m, "SAMDataset", nb::dynamic_attr(),
                      "    One or more scans providing data, headers and "
                      "labels.\n"
                      "pad_value : float, optional\n"
-                     "    Value used to pad shorter scans to the common "
-                     "length.\n"
+                     "    Value used by ``merge='pad'`` for shorter scans.\n"
                      "unsupervised : bool or None, optional\n"
                      "    When True labels are discarded; when False labels "
                      "are required.  None (default) auto-detects: supervised "
-                     "only when all scans are labeled.")
+                     "only when all scans are labeled.\n"
+                     "merge : str, optional\n"
+                     "    Length/alignment policy: ``'crop'`` (default; keep "
+                     "the leading ``min(scanlens)`` samples), ``'pad'`` "
+                     "(legacy zero/constant padding to the longest scan), "
+                     "``'xcorr'`` (align all pooled rows to one reference by "
+                     "cross-correlation, then keep the common overlap), or "
+                     "``'zgate'`` (threshold-align every row to "
+                     "``zgate_length`` samples).\n"
+                     "reference : int, optional\n"
+                     "    Pooled row used as the xcorr reference.  Default 0.\n"
+                     "max_shift : int or None, optional\n"
+                     "    Maximum xcorr lag in samples; None means "
+                     "``min(scanlens) // 4``.\n"
+                     "max_gate_loss : float, optional\n"
+                     "    Maximum xcorr lag spread as a fraction of the "
+                     "common prefix.  Default 1.0.\n"
+                     "threshold : float, optional\n"
+                     "    Zgate fraction of the int8 full scale.  Default 0.2.\n"
+                     "zgate_length : int, optional\n"
+                     "    Zgate output window in samples.  Default 2000.")
         .def_static("load",
                     [](const std::string& path, bool lazy) {
                         return without_gil([&] {
@@ -116,7 +171,7 @@ nb::class_<sam_dataset>(m, "SAMDataset", nb::dynamic_attr(),
             without_gil([&] { d.load(); });
             auto& x = d.X();
             return nb::ndarray<nb::numpy, float>(x.data(), {x.rows(), x.cols()});
-        }, "Signal matrix (num_samples, maxlen) float32.")
+        }, "Signal matrix (num_samples, common_length) float32.")
         .def_prop_ro("labels",
                      [](sam_dataset& d) -> sam_labels* {
                          return d.labels().has_value() ? &*d.labels() : nullptr;
@@ -164,7 +219,25 @@ nb::class_<sam_dataset>(m, "SAMDataset", nb::dynamic_attr(),
                      [](const sam_dataset& d) { return d.unsupervised(); },
                      "Whether the dataset carries no labels.")
         .def_prop_ro("pad_value", [](const sam_dataset& d) { return d.pad_value(); },
-                     "Value used to pad shorter scans.")
+                     "Value used by ``merge='pad'`` for shorter scans.")
+        .def_prop_ro("merge_mode", [](const sam_dataset& d) {
+            return d.merge_mode_name();
+        }, "Merge policy used to build the dataset: 'crop', 'pad', 'xcorr' "
+           "or 'zgate'.")
+        .def_prop_ro("valid_scanlens",
+                     [](const sam_dataset& d) { return d.valid_scanlens(); },
+                     "Valid signal length of each cube in samples.  Equal to "
+                     "the original scanlen under 'pad' and to the common "
+                     "merged width after crop/xcorr/zgate.")
+        .def_prop_ro("cube_samplerates",
+                     [](const sam_dataset& d) { return d.cube_samplerates(); },
+                     "Sampling rate (MHz) of each source cube; empty for "
+                     "legacy files without metadata.")
+        .def_prop_ro("samplerate", [](const sam_dataset& d) -> nb::object {
+            const auto fs = d.samplerate();
+            return fs ? nb::cast(*fs) : nb::none();
+        }, nb::sig("def samplerate(self) -> float | None"),
+           "Common sampling rate in MHz, or None when unknown or mixed.")
         .def_prop_ro("num_samples",
                      [](const sam_dataset& d) { return d.num_samples(); },
                      "Total number of signals across all cubes.")
@@ -175,7 +248,8 @@ nb::class_<sam_dataset>(m, "SAMDataset", nb::dynamic_attr(),
         }, nb::sig("def num_features(self) -> int | None"),
            "Number of columns of ``Z``, or None if not set.")
         .def_prop_ro("maxlen", [](const sam_dataset& d) { return d.maxlen(); },
-                     "Common (padded) scan length of ``X``.")
+                     "Common stored signal length of ``X`` (kept for API "
+                     "compatibility; not necessarily the longest source scan).")
         .def_prop_ro("num_classes",
                      [](const sam_dataset& d) { return d.num_classes(); },
                      "Number of labeled classes.")
@@ -277,15 +351,20 @@ nb::class_<sam_dataset>(m, "SAMDataset", nb::dynamic_attr(),
             return out;
         }, "Number of signals per cube id.")
         .def_static("convert_from_paths",
-            [](const std::vector<std::string>& input_paths,
+            [make_options](const std::vector<std::string>& input_paths,
                const std::string& output_path, float pad_value,
-               std::optional<bool> unsupervised) {
+               std::optional<bool> unsupervised, const std::string& merge,
+               size_t reference, std::optional<std::int64_t> max_shift,
+               double max_gate_loss, double threshold,
+               std::int64_t zgate_length) {
+                const auto options = make_options(
+                    merge, pad_value, reference, max_shift.value_or(0),
+                    max_gate_loss, threshold, zgate_length);
                 std::vector<std::filesystem::path> paths;
                 for (const auto& p : input_paths) paths.emplace_back(p);
                 without_gil([&] {
-                    samcore::io::convert_h5sam_to_h5samd(paths, output_path,
-                                                         pad_value,
-                                                         unsupervised);
+                    samcore::io::convert_h5sam_to_h5samd(
+                        paths, output_path, options, unsupervised);
                 });
                 return without_gil(
                     [&] { return sam_dataset::load(output_path); });
@@ -293,12 +372,17 @@ nb::class_<sam_dataset>(m, "SAMDataset", nb::dynamic_attr(),
             nb::arg("input_paths"), nb::arg("output_path"),
             nb::arg("pad_value") = 0.0f,
             nb::arg("unsupervised") = nb::none(),
+            nb::arg("merge") = "crop", nb::arg("reference") = 0,
+            nb::arg("max_shift") = nb::none(),
+            nb::arg("max_gate_loss") = 1.0, nb::arg("threshold") = 0.2,
+            nb::arg("zgate_length") = 2000,
             nb::sig(
-                "def convert_from_paths(input_paths: collections.abc.Sequence[str], output_path: str, pad_value: float = 0.0, unsupervised: bool | None = None) -> SAMDataset"),
+                "def convert_from_paths(input_paths: collections.abc.Sequence[str], output_path: str, pad_value: float = 0.0, unsupervised: bool | None = None, merge: str = 'crop', reference: int = 0, max_shift: int | None = None, max_gate_loss: float = 1.0, threshold: float = 0.2, zgate_length: int = 2000) -> SAMDataset"),
             "Convert multiple .h5sam files into a single .h5samd file.\n\n"
-                    "Reads headers and labels from all files first to "
-                    "pre-size the output, then streams signal data one file "
-                    "at a time to bound memory usage.\n\n"
+                    "Reads headers and labels from all files first, then "
+                    "streams signal data one file at a time.  Global xcorr "
+                    "uses one extra signal pass because the final overlap "
+                    "depends on every lag.\n\n"
                     "Parameters\n"
                     "----------\n"
                     "input_paths : sequence of str\n"
@@ -307,11 +391,22 @@ nb::class_<sam_dataset>(m, "SAMDataset", nb::dynamic_attr(),
                     "    Destination .h5samd path (must end with "
                     "``.h5samd``).\n"
                     "pad_value : float, optional\n"
-                    "    Value used to pad shorter signals to the common max "
-                    "length.\n"
+                    "    Value used by ``merge='pad'``.\n"
                     "unsupervised : bool or None, optional\n"
                     "    If None, auto-detected from whether any cube is "
-                    "labeled.\n\n"
+                    "labeled.\n"
+                    "merge : str, optional\n"
+                    "    'crop' (default), 'pad', 'xcorr' or 'zgate'.\n"
+                    "reference : int, optional\n"
+                    "    Pooled row used as the xcorr reference.\n"
+                    "max_shift : int or None, optional\n"
+                    "    Maximum xcorr lag; None means min scanlen // 4.\n"
+                    "max_gate_loss : float, optional\n"
+                    "    Maximum xcorr lag-spread fraction.\n"
+                    "threshold : float, optional\n"
+                    "    Zgate threshold fraction of full scale.\n"
+                    "zgate_length : int, optional\n"
+                    "    Zgate output window in samples.\n\n"
                     "Returns\n"
                     "-------\n"
                     "SAMDataset\n"
@@ -352,6 +447,197 @@ nb::class_<sam_dataset>(m, "SAMDataset", nb::dynamic_attr(),
                      "``SAMHeader.samplerate``; only their ratio is used); "
                      "``window_length``, ``kernel_size``, ``window``, "
                      "``start`` and ``end`` are in samples.")
+        .def("_align_manual",
+             [](sam_dataset& d, in_i32_1 starts, std::int64_t scanlen) {
+                 without_gil([&] {
+                     d.align_manual(
+                         std::vector<std::int32_t>(
+                             starts.data(), starts.data() + starts.shape(0)),
+                         scanlen);
+                 });
+             },
+             nb::arg("starts"), nb::arg("scanlen"),
+             "Align all dataset rows to manual relative window starts.")
+        .def("_align_xcorr",
+             [](sam_dataset& d, size_t reference, std::int64_t max_shift,
+                double max_gate_loss) {
+                 without_gil([&] {
+                     d.align_xcorr(reference, max_shift, max_gate_loss);
+                 });
+             },
+             nb::arg("reference") = 0, nb::arg("max_shift") = 0,
+             nb::arg("max_gate_loss") = 1.0,
+             "Align every dataset row to one pooled reference row by "
+             "cross-correlation.")
+        .def("_align_zgate",
+             [](sam_dataset& d, double threshold, std::int64_t length) {
+                 without_gil([&] { d.align_zgate(threshold, length); });
+             },
+             nb::arg("threshold") = 0.2, nb::arg("length") = 2000,
+             "Threshold-align every dataset row to a common window length.")
+        .def("_align_tof",
+             [](sam_dataset& d, double gate_ns, size_t reference,
+                double start_ns, double max_gate_loss) {
+                 without_gil([&] {
+                     d.align_tof(gate_ns, reference, start_ns, max_gate_loss);
+                 });
+             },
+             nb::arg("gate_ns"), nb::arg("reference") = 0,
+             nb::arg("start_ns") = 0.0, nb::arg("max_gate_loss") = 1.0,
+             "Align every dataset row to the reference envelope peak.")
+        .def("compute_stft",
+             [](const sam_dataset& d, size_t nperseg, size_t noverlap,
+                double f_min, double f_max) {
+                 auto r = without_gil([&] {
+                     return d.compute_stft(nperseg, noverlap, f_min, f_max);
+                 });
+                 return nb::make_tuple(to_numpy(std::move(r.f)),
+                                       to_numpy(std::move(r.t)),
+                                       to_numpy3(std::move(r.zxx)));
+             },
+             nb::arg("nperseg") = 256, nb::arg("noverlap") = 128,
+             nb::arg("f_min") = 0.0, nb::arg("f_max") = 0.0,
+             nb::sig(
+                 "def compute_stft(self, nperseg: int = 256, noverlap: int = 128, f_min: float = 0.0, f_max: float = 0.0) -> tuple[numpy.typing.NDArray[numpy.float32], numpy.typing.NDArray[numpy.float32], numpy.typing.NDArray[numpy.complex64]]"),
+             "STFT of every dataset row.\n\n"
+                     "Requires a common ``samplerate`` and a common valid "
+                     "length across cubes.  Times are relative to the start "
+                     "of each signal.  Use :meth:`compute_stft_by_cube` for "
+                     "ragged datasets.")
+        .def("compute_stft_by_cube",
+             [](const sam_dataset& d, size_t nperseg, size_t noverlap,
+                double f_min, double f_max) {
+                 auto results = without_gil([&] {
+                     return d.compute_stft_by_cube(nperseg, noverlap, f_min,
+                                                   f_max);
+                 });
+                 nb::list out;
+                 for (auto& r : results) {
+                     out.append(nb::make_tuple(to_numpy(std::move(r.f)),
+                                               to_numpy(std::move(r.t)),
+                                               to_numpy3(std::move(r.zxx))));
+                 }
+                 return out;
+             },
+             nb::arg("nperseg") = 256, nb::arg("noverlap") = 128,
+             nb::arg("f_min") = 0.0, nb::arg("f_max") = 0.0,
+             "Per-cube STFT results as a list of (freqs, times, zxx).")
+        .def("psd",
+             [](const sam_dataset& d, size_t nperseg, size_t noverlap,
+                double f_min, double f_max) {
+                 auto r = without_gil([&] {
+                     return d.psd(nperseg, noverlap, f_min, f_max);
+                 });
+                 return nb::make_tuple(to_numpy(std::move(r.f)),
+                                       to_numpy(std::move(r.psd)));
+             },
+             nb::arg("nperseg") = 256, nb::arg("noverlap") = 128,
+             nb::arg("f_min") = 0.0, nb::arg("f_max") = 0.0,
+             nb::sig(
+                 "def psd(self, nperseg: int = 256, noverlap: int = 128, f_min: float = 0.0, f_max: float = 0.0) -> tuple[numpy.typing.NDArray[numpy.float32], numpy.typing.NDArray[numpy.float32]]"),
+             "Welch PSD of every dataset row, excluding padded samples.")
+        .def("psd_by_cube",
+             [](const sam_dataset& d, size_t nperseg, size_t noverlap,
+                double f_min, double f_max) {
+                 auto results = without_gil([&] {
+                     return d.psd_by_cube(nperseg, noverlap, f_min, f_max);
+                 });
+                 nb::list out;
+                 for (auto& r : results) {
+                     out.append(nb::make_tuple(to_numpy(std::move(r.f)),
+                                               to_numpy(std::move(r.psd))));
+                 }
+                 return out;
+             },
+             nb::arg("nperseg") = 256, nb::arg("noverlap") = 128,
+             nb::arg("f_min") = 0.0, nb::arg("f_max") = 0.0,
+             "Per-cube Welch PSD results as a list of (freqs, psd).")
+        .def("power_spectrogram",
+             [](const sam_dataset& d, size_t nperseg, size_t noverlap,
+                double f_min, double f_max) {
+                 auto r = without_gil([&] {
+                     return d.power_spectrogram(nperseg, noverlap, f_min,
+                                                f_max);
+                 });
+                 return nb::make_tuple(to_numpy(std::move(r.f)),
+                                       to_numpy(std::move(r.t)),
+                                       to_numpy3(std::move(r.sxx)));
+             },
+             nb::arg("nperseg") = 256, nb::arg("noverlap") = 128,
+             nb::arg("f_min") = 0.0, nb::arg("f_max") = 0.0,
+             nb::sig(
+                 "def power_spectrogram(self, nperseg: int = 256, noverlap: int = 128, f_min: float = 0.0, f_max: float = 0.0) -> tuple[numpy.typing.NDArray[numpy.float32], numpy.typing.NDArray[numpy.float32], numpy.typing.NDArray[numpy.float32]]"),
+             "Power spectrogram of every dataset row.\n\n"
+                     "Requires a common samplerate and common valid length; "
+                     "times are relative to each signal's start.")
+        .def("power_spectrogram_by_cube",
+             [](const sam_dataset& d, size_t nperseg, size_t noverlap,
+                double f_min, double f_max) {
+                 auto results = without_gil([&] {
+                     return d.power_spectrogram_by_cube(
+                         nperseg, noverlap, f_min, f_max);
+                 });
+                 nb::list out;
+                 for (auto& r : results) {
+                     out.append(nb::make_tuple(to_numpy(std::move(r.f)),
+                                               to_numpy(std::move(r.t)),
+                                               to_numpy3(std::move(r.sxx))));
+                 }
+                 return out;
+             },
+             nb::arg("nperseg") = 256, nb::arg("noverlap") = 128,
+             nb::arg("f_min") = 0.0, nb::arg("f_max") = 0.0,
+             "Per-cube power spectrograms as a list of (freqs, times, sxx).")
+        .def("stft_peak_frequency",
+             [](const sam_dataset& d, size_t nperseg, size_t noverlap,
+                double f_min, double f_max) {
+                 return to_numpy(without_gil([&] {
+                     return d.stft_peak_frequency(nperseg, noverlap, f_min,
+                                                  f_max);
+                 }));
+             },
+             nb::arg("nperseg") = 256, nb::arg("noverlap") = 128,
+             nb::arg("f_min") = 0.0, nb::arg("f_max") = 0.0,
+             nb::sig(
+                 "def stft_peak_frequency(self, nperseg: int = 256, noverlap: int = 128, f_min: float = 0.0, f_max: float = 0.0) -> numpy.typing.NDArray[numpy.float32]"),
+             "Peak STFT frequency per dataset row (Hz).")
+        .def("stft_peak_time",
+             [](const sam_dataset& d, size_t nperseg, size_t noverlap,
+                double f_min, double f_max) {
+                 return to_numpy(without_gil([&] {
+                     return d.stft_peak_time(nperseg, noverlap, f_min,
+                                             f_max);
+                 }));
+             },
+             nb::arg("nperseg") = 256, nb::arg("noverlap") = 128,
+             nb::arg("f_min") = 0.0, nb::arg("f_max") = 0.0,
+             nb::sig(
+                 "def stft_peak_time(self, nperseg: int = 256, noverlap: int = 128, f_min: float = 0.0, f_max: float = 0.0) -> numpy.typing.NDArray[numpy.float32]"),
+             "Peak STFT time per dataset row (seconds, relative to each "
+             "signal start).")
+        .def("spectrum",
+             [](const sam_dataset& d) {
+                 auto r = without_gil([&] { return d.spectrum(); });
+                 return nb::make_tuple(to_numpy(std::move(r.f)),
+                                       to_numpy(std::move(r.mag)));
+             },
+             nb::sig(
+                 "def spectrum(self) -> tuple[numpy.typing.NDArray[numpy.float32], numpy.typing.NDArray[numpy.float32]]"),
+             "One-sided FFT magnitude of every dataset row.\n\n"
+                     "Requires common samplerate and common valid length; "
+                     "use :meth:`spectrum_by_cube` for ragged datasets.")
+        .def("spectrum_by_cube",
+             [](const sam_dataset& d) {
+                 auto results =
+                     without_gil([&] { return d.spectrum_by_cube(); });
+                 nb::list out;
+                 for (auto& r : results) {
+                     out.append(nb::make_tuple(to_numpy(std::move(r.f)),
+                                               to_numpy(std::move(r.mag))));
+                 }
+                 return out;
+             },
+             "Per-cube one-sided FFT spectra as a list of (freqs, magnitude).")
         .def("get_cube_X",
              [](sam_dataset& d, std::int32_t idx) {
                  return to_numpy3(without_gil([&] { return d.get_cube_X(idx); }));

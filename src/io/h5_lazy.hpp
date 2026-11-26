@@ -23,6 +23,7 @@
 #include <samcore/array.hpp>
 #include <samcore/sam_header.hpp>
 #include <samcore/sam_labels.hpp>
+#include <samcore/sam_merge.hpp>
 
 namespace samcore::io {
 
@@ -187,6 +188,10 @@ struct h5samd_lazy_handle {
     std::vector<std::pair<std::int32_t, std::int32_t>> cube_shapes;
     std::vector<double> cube_resolutions;
     std::vector<std::int32_t> scanlens;
+    std::vector<std::int32_t> valid_scanlens;
+    std::vector<double> cube_samplerates;
+    merge_mode merge = merge_mode::pad;
+    float pad_value = 0.0f;
     bool unsupervised = false;
     std::unique_ptr<h5samd_lazy_state> data;
 };

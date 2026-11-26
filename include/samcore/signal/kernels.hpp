@@ -163,4 +163,9 @@ butter_bandpass(double cutoff_low, double cutoff_high, double fs);
                                      std::span<const std::int8_t> ref,
                                      std::int64_t max_shift);
 
+// float32 overload used by dataset-wide alignment (identical semantics).
+[[nodiscard]] std::int64_t xcorr_lag(std::span<const float> x,
+                                     std::span<const float> ref,
+                                     std::int64_t max_shift);
+
 } // namespace samcore::signal

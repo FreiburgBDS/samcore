@@ -2,9 +2,14 @@
 
 #include <H5Cpp.h>
 
+#include <samcore/constants.hpp>
+#include <samcore/signal/kernels.hpp>
+
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <numeric>
+#include <span>
 
 #include "h5_common.hpp"
 #include "h5_lazy.hpp"
@@ -68,6 +73,41 @@ void write_cube_shapes(H5::H5File& file,
     if (!buf.empty()) dset.write(buf.data(), H5::PredType::NATIVE_INT32);
 }
 
+void write_i32_1d(H5::H5File& file, const std::string& name,
+                  const std::vector<std::int32_t>& values) {
+    const hsize_t dims = values.size();
+    H5::DataSpace space(1, &dims);
+    H5::DSetCreatPropList plist;
+    H5::DataSet dset =
+        file.createDataSet(name, H5::PredType::NATIVE_INT32, space, plist);
+    if (!values.empty()) {
+        dset.write(values.data(), H5::PredType::NATIVE_INT32);
+    }
+}
+
+void write_f64_1d(H5::H5File& file, const std::string& name,
+                  const std::vector<double>& values) {
+    const hsize_t dims = values.size();
+    H5::DataSpace space(1, &dims);
+    H5::DSetCreatPropList plist;
+    H5::DataSet dset =
+        file.createDataSet(name, H5::PredType::NATIVE_DOUBLE, space, plist);
+    if (!values.empty()) {
+        dset.write(values.data(), H5::PredType::NATIVE_DOUBLE);
+    }
+}
+
+std::int64_t first_crossing_i8(std::span<const std::int8_t> signal,
+                                double thresh_val) {
+    for (size_t k = 0; k < signal.size(); ++k) {
+        const auto a = static_cast<std::int8_t>(std::abs(signal[k]));
+        if (static_cast<double>(a) >= thresh_val) {
+            return static_cast<std::int64_t>(k);
+        }
+    }
+    return -1;
+}
+
 // Shape of a 2-D dataset (same validation as detail::read_2d).
 std::pair<size_t, size_t> dataset_dims(H5::DataSet& dset) {
     H5::DataSpace space = dset.getSpace();
@@ -86,12 +126,32 @@ struct h5samd_meta {
     std::vector<std::pair<std::int32_t, std::int32_t>> cube_shapes;
     std::vector<double> cube_resolutions;
     std::vector<std::int32_t> scanlens;
+    std::vector<std::int32_t> valid_scanlens;
+    std::vector<double> cube_samplerates;
+    merge_mode merge = merge_mode::pad;
+    float pad_value = 0.0f;
     bool unsupervised = false;
 };
+
+std::vector<double> read_f64_1d(H5::DataSet& dset) {
+    H5::DataSpace space = dset.getSpace();
+    std::vector<double> buf(static_cast<size_t>(space.getSimpleExtentNpoints()));
+    if (!buf.empty()) dset.read(buf.data(), H5::PredType::NATIVE_DOUBLE);
+    return buf;
+}
 
 h5samd_meta read_h5samd_meta(H5::H5File& file, size_t x_cols) {
     h5samd_meta meta;
     meta.unsupervised = read_unsupervised(file);
+
+    if (file.attrExists("merge_mode")) {
+        H5::Attribute attr = file.openAttribute("merge_mode");
+        meta.merge = merge_mode_from_string(detail::read_string_attr(attr));
+    }
+    if (file.attrExists("pad_value")) {
+        H5::Attribute attr = file.openAttribute("pad_value");
+        attr.read(H5::PredType::NATIVE_FLOAT, &meta.pad_value);
+    }
 
     std::vector<std::int8_t> labels_arr;
     if (file.nameExists("labels")) {
@@ -112,10 +172,12 @@ h5samd_meta read_h5samd_meta(H5::H5File& file, size_t x_cols) {
 
     if (file.nameExists("cube_resolutions")) {
         H5::DataSet dset = file.openDataSet("cube_resolutions");
-        H5::DataSpace space = dset.getSpace();
-        std::vector<double> buf(static_cast<size_t>(space.getSimpleExtentNpoints()));
-        if (!buf.empty()) dset.read(buf.data(), H5::PredType::NATIVE_DOUBLE);
-        meta.cube_resolutions = std::move(buf);
+        meta.cube_resolutions = read_f64_1d(dset);
+    }
+
+    if (file.nameExists("cube_samplerates")) {
+        H5::DataSet dset = file.openDataSet("cube_samplerates");
+        meta.cube_samplerates = read_f64_1d(dset);
     }
 
     if (file.nameExists("scanlens")) {
@@ -126,6 +188,14 @@ h5samd_meta read_h5samd_meta(H5::H5File& file, size_t x_cols) {
         for (size_t i = 0; i < meta.cube_shapes.size(); ++i) {
             meta.scanlens.push_back(static_cast<std::int32_t>(x_cols));
         }
+    }
+
+    if (file.nameExists("valid_scanlens")) {
+        H5::DataSet dset = file.openDataSet("valid_scanlens");
+        meta.valid_scanlens = detail::read_i32_1d(dset);
+    } else {
+        // Legacy files stored every valid sample (padding only extends rows).
+        meta.valid_scanlens = meta.scanlens;
     }
     return meta;
 }
@@ -155,6 +225,10 @@ h5samd_result read_h5samd(const std::filesystem::path& path) {
         result.cube_shapes = std::move(meta.cube_shapes);
         result.cube_resolutions = std::move(meta.cube_resolutions);
         result.scanlens = std::move(meta.scanlens);
+        result.valid_scanlens = std::move(meta.valid_scanlens);
+        result.cube_samplerates = std::move(meta.cube_samplerates);
+        result.merge = meta.merge;
+        result.pad_value = meta.pad_value;
 
         if (file.nameExists("Z")) {
             H5::DataSet dset = file.openDataSet("Z");
@@ -195,6 +269,10 @@ h5samd_lazy_handle read_h5samd_lazy(const std::filesystem::path& path) {
         handle.cube_shapes = std::move(meta.cube_shapes);
         handle.cube_resolutions = std::move(meta.cube_resolutions);
         handle.scanlens = std::move(meta.scanlens);
+        handle.valid_scanlens = std::move(meta.valid_scanlens);
+        handle.cube_samplerates = std::move(meta.cube_samplerates);
+        handle.merge = meta.merge;
+        handle.pad_value = meta.pad_value;
 
         if (file.nameExists("Z")) {
             H5::DataSet dset = file.openDataSet("Z");
@@ -237,7 +315,10 @@ void write_h5samd(const std::filesystem::path& path, const array2d<float>& x,
                   const std::optional<sam_labels>& labels,
                   const std::vector<std::pair<std::int32_t, std::int32_t>>& cube_shapes,
                   const std::vector<double>& cube_resolutions,
-                  const std::vector<std::int32_t>& scanlens, bool unsupervised,
+                  const std::vector<std::int32_t>& scanlens,
+                  const std::vector<std::int32_t>& valid_scanlens,
+                  const std::vector<double>& cube_samplerates,
+                  merge_mode merge, float pad_value, bool unsupervised,
                   const std::optional<array2d<float>>& z,
                   const std::optional<array2d<float>>& v) {
     if (path.extension().string() != ".h5samd") {
@@ -247,6 +328,9 @@ void write_h5samd(const std::filesystem::path& path, const array2d<float>& x,
         H5::H5File file(path.string(), H5F_ACC_TRUNC);
 
         detail::write_format_version(file);
+        detail::write_string_attr(file, "merge_mode", to_string(merge));
+        detail::write_double_attr(file, "pad_value",
+                                  static_cast<double>(pad_value));
 
         detail::write_2d_gzip(file, "X", x, H5::PredType::NATIVE_FLOAT);
 
@@ -277,26 +361,10 @@ void write_h5samd(const std::filesystem::path& path, const array2d<float>& x,
                                         : std::vector<std::string>{});
 
         write_cube_shapes(file, cube_shapes);
-
-        {
-            const hsize_t dims = cube_resolutions.size();
-            H5::DataSpace space(1, &dims);
-            H5::DSetCreatPropList plist;
-            H5::DataSet dset = file.createDataSet("cube_resolutions",
-                                                  H5::PredType::NATIVE_DOUBLE, space, plist);
-            if (!cube_resolutions.empty()) {
-                dset.write(cube_resolutions.data(), H5::PredType::NATIVE_DOUBLE);
-            }
-        }
-
-        {
-            const hsize_t dims = scanlens.size();
-            H5::DataSpace space(1, &dims);
-            H5::DSetCreatPropList plist;
-            H5::DataSet dset = file.createDataSet("scanlens", H5::PredType::NATIVE_INT32,
-                                                  space, plist);
-            if (!scanlens.empty()) dset.write(scanlens.data(), H5::PredType::NATIVE_INT32);
-        }
+        write_f64_1d(file, "cube_resolutions", cube_resolutions);
+        write_f64_1d(file, "cube_samplerates", cube_samplerates);
+        write_i32_1d(file, "scanlens", scanlens);
+        write_i32_1d(file, "valid_scanlens", valid_scanlens);
 
         write_unsupervised(file, unsupervised);
 
@@ -313,7 +381,8 @@ void write_h5samd(const std::filesystem::path& path, const array2d<float>& x,
 
 void convert_h5sam_to_h5samd(
     const std::vector<std::filesystem::path>& input_paths,
-    const std::filesystem::path& output_path, float pad_value,
+    const std::filesystem::path& output_path,
+    const dataset_merge_options& options,
     std::optional<bool> unsupervised) {
     if (output_path.extension().string() != ".h5samd") {
         throw std::invalid_argument("Output path must end with .h5samd");
@@ -334,13 +403,13 @@ void convert_h5sam_to_h5samd(
         std::vector<sam_labels> labels_list;
         std::vector<std::pair<std::int32_t, std::int32_t>> cube_shapes;
         std::vector<double> cube_resolutions;
+        std::vector<double> cube_samplerates;
         std::vector<std::int32_t> scanlens;
         std::vector<std::int64_t> scan_counts;
 
         for (const auto& path : input_paths) {
             // Metadata-only open: header/labels/starts are read eagerly and
-            // the signal dataset is never touched in this pass (it is read
-            // once in phase 2).
+            // the signal dataset is not touched in this pass.
             io::h5sam_lazy_handle meta = io::read_h5sam_lazy(path);
             if (!meta.data) {
                 throw std::runtime_error(
@@ -354,6 +423,7 @@ void convert_h5sam_to_h5samd(
             cube_shapes.emplace_back(static_cast<std::int32_t>(meta.header.nlines),
                                      static_cast<std::int32_t>(meta.header.scanspline));
             cube_resolutions.push_back(meta.header.resolution);
+            cube_samplerates.push_back(meta.header.samplerate);
             labels_list.push_back(std::move(meta.labels));
         }
 
@@ -361,6 +431,8 @@ void convert_h5sam_to_h5samd(
             std::accumulate(scan_counts.begin(), scan_counts.end(), std::int64_t{0});
         const std::int64_t max_scanlen =
             *std::max_element(scanlens.begin(), scanlens.end());
+        const std::int64_t min_scanlen =
+            *std::min_element(scanlens.begin(), scanlens.end());
 
         sam_labels merged_labels =
             labels_list.size() >= 2 ? merge_labels(labels_list) : labels_list[0].copy();
@@ -379,34 +451,172 @@ void convert_h5sam_to_h5samd(
             }
         }
 
+        // Resolve the global alignment plan.  crop/pad/zgate widths are known
+        // from metadata; xcorr needs a planning pass over the signals.
+        std::int64_t out_cols = 0;
+        std::vector<std::vector<std::int32_t>> cube_offsets(input_paths.size());
+        if (options.mode == merge_mode::crop) {
+            out_cols = min_scanlen;
+        } else if (options.mode == merge_mode::pad) {
+            out_cols = max_scanlen;
+        } else if (options.mode == merge_mode::zgate) {
+            if (options.zgate_length <= 0) {
+                throw std::invalid_argument(
+                    "zgate_length must be a positive integer.");
+            }
+            if (options.threshold < 0.0 || options.threshold > 1.0) {
+                throw std::invalid_argument(
+                    "zgate threshold must be between 0.0 and 1.0.");
+            }
+            if (options.zgate_length > min_scanlen) {
+                throw std::invalid_argument(
+                    "zgate_length cannot exceed the shortest scan length (" +
+                    std::to_string(min_scanlen) + ").");
+            }
+            out_cols = options.zgate_length;
+        } else {
+            if (options.reference >= static_cast<size_t>(total_signals)) {
+                throw std::out_of_range(
+                    "xcorr reference row is out of range.");
+            }
+            if (options.max_gate_loss <= 0.0 || options.max_gate_loss > 1.0) {
+                throw std::invalid_argument(
+                    "max_gate_loss must be in (0, 1].");
+            }
+            const size_t common = static_cast<size_t>(min_scanlen);
+            std::int64_t max_shift = options.max_shift;
+            if (max_shift == 0) {
+                max_shift = static_cast<std::int64_t>(common / 4);
+            }
+            if (max_shift < 0 || static_cast<size_t>(max_shift) >= common) {
+                throw std::invalid_argument(
+                    "max_shift must be in [0, min_scanlen).");
+            }
+
+            std::size_t ref_cube = 0;
+            std::size_t ref_row = options.reference;
+            while (ref_row >= static_cast<size_t>(scan_counts[ref_cube])) {
+                ref_row -= static_cast<size_t>(scan_counts[ref_cube]);
+                ++ref_cube;
+            }
+            h5sam_result ref_res = read_h5sam(input_paths[ref_cube]);
+            std::vector<std::int8_t> ref_buf(common);
+            std::copy_n(ref_res.data[ref_row].begin(),
+                        static_cast<std::ptrdiff_t>(common), ref_buf.begin());
+            const std::span<const std::int8_t> ref(ref_buf.data(), common);
+
+            std::int32_t min_shift = 0;
+            std::int32_t max_shift_v = 0;
+            bool first_shift = true;
+            for (size_t i = 0; i < input_paths.size(); ++i) {
+                h5sam_result res = read_h5sam(input_paths[i]);
+                cube_offsets[i].resize(static_cast<size_t>(scan_counts[i]));
+                for (size_t r = 0; r < cube_offsets[i].size(); ++r) {
+                    const auto& src = res.data[r];
+                    const std::int32_t lag = static_cast<std::int32_t>(
+                        signal::xcorr_lag(
+                            std::span<const std::int8_t>(src.data(), common),
+                            ref, max_shift));
+                    cube_offsets[i][r] = lag;
+                    if (first_shift) {
+                        min_shift = max_shift_v = lag;
+                        first_shift = false;
+                    } else {
+                        min_shift = std::min(min_shift, lag);
+                        max_shift_v = std::max(max_shift_v, lag);
+                    }
+                }
+            }
+            const std::int64_t spread =
+                static_cast<std::int64_t>(max_shift_v) - min_shift;
+            if (static_cast<double>(spread) >
+                options.max_gate_loss * static_cast<double>(common)) {
+                throw std::invalid_argument(
+                    "xcorr: aligned shift spread exceeds max_gate_loss.");
+            }
+            out_cols = std::numeric_limits<std::int64_t>::max();
+            for (size_t i = 0; i < input_paths.size(); ++i) {
+                std::int32_t max_offset = 0;
+                for (auto& offset : cube_offsets[i]) {
+                    offset -= min_shift;
+                    max_offset = std::max(max_offset, offset);
+                }
+                out_cols = std::min(out_cols,
+                                    static_cast<std::int64_t>(scanlens[i]) -
+                                        max_offset);
+            }
+            if (out_cols <= 0) {
+                throw std::invalid_argument(
+                    "xcorr: lag spread exceeds every source scan length.");
+            }
+        }
+
+        if (out_cols <= 0) {
+            throw std::invalid_argument("Merged dataset has zero signal length.");
+        }
+
+        std::vector<std::int32_t> valid_scanlens(scanlens.size());
+        for (size_t i = 0; i < scanlens.size(); ++i) {
+            valid_scanlens[i] = options.mode == merge_mode::pad
+                                    ? scanlens[i]
+                                    : static_cast<std::int32_t>(out_cols);
+        }
+
         // Phase 2: create the output and stream data per file.
         H5::H5File out(output_path.string(), H5F_ACC_TRUNC);
         detail::write_format_version(out);
+        detail::write_string_attr(out, "merge_mode", to_string(options.mode));
+        detail::write_double_attr(out, "pad_value",
+                                  static_cast<double>(options.pad_value));
 
         {
             const hsize_t dims[2] = {static_cast<hsize_t>(total_signals),
-                                     static_cast<hsize_t>(max_scanlen)};
+                                     static_cast<hsize_t>(out_cols)};
             H5::DataSpace space(2, dims);
             H5::DSetCreatPropList plist =
                 detail::gzip_plist(static_cast<size_t>(total_signals),
-                                   static_cast<size_t>(max_scanlen), sizeof(float));
+                                   static_cast<size_t>(out_cols), sizeof(float));
             H5::DataSet dset = out.createDataSet("X", H5::PredType::NATIVE_FLOAT,
                                                  space, plist);
             std::int64_t offset = 0;
             for (size_t i = 0; i < input_paths.size(); ++i) {
                 h5sam_result res = read_h5sam(input_paths[i]);
                 const std::int64_t n = static_cast<std::int64_t>(res.data.rows());
-                const std::int64_t sl = static_cast<std::int64_t>(res.data.cols());
-                std::vector<float> cube(n * max_scanlen, pad_value);
+                std::vector<float> cube(static_cast<size_t>(n * out_cols),
+                                        options.pad_value);
+                const double thresh_val = options.threshold * full_scale;
                 for (std::int64_t r = 0; r < n; ++r) {
-                    for (std::int64_t c = 0; c < sl; ++c) {
-                        cube[static_cast<size_t>(r * max_scanlen + c)] =
-                            static_cast<float>(res.data[static_cast<size_t>(r)]
-                                                       [static_cast<size_t>(c)]);
+                    float* dst = cube.data() + static_cast<std::ptrdiff_t>(
+                                                  r * out_cols);
+                    const auto src = res.data[static_cast<size_t>(r)];
+                    if (options.mode == merge_mode::pad) {
+                        for (std::int64_t c = 0; c < scanlens[i]; ++c) {
+                            dst[c] = static_cast<float>(src[static_cast<size_t>(c)]);
+                        }
+                    } else if (options.mode == merge_mode::zgate) {
+                        std::int64_t start = first_crossing_i8(src, thresh_val);
+                        if (start >= 0) {
+                            start = std::min(start, scanlens[i] - out_cols);
+                            for (std::int64_t c = 0; c < out_cols; ++c) {
+                                dst[c] = static_cast<float>(
+                                    src[static_cast<size_t>(start + c)]);
+                            }
+                        } else {
+                            std::fill(dst, dst + out_cols, 0.0f);
+                        }
+                    } else {
+                        const std::int64_t start =
+                            options.mode == merge_mode::xcorr
+                                ? cube_offsets[i][static_cast<size_t>(r)]
+                                : 0;
+                        for (std::int64_t c = 0; c < out_cols; ++c) {
+                            dst[c] = static_cast<float>(
+                                src[static_cast<size_t>(start + c)]);
+                        }
                     }
                 }
                 const hsize_t sel[2] = {static_cast<hsize_t>(n),
-                                        static_cast<hsize_t>(max_scanlen)};
+                                        static_cast<hsize_t>(out_cols)};
                 const hsize_t off[2] = {static_cast<hsize_t>(offset), 0};
                 H5::DataSpace fspace = dset.getSpace();
                 fspace.selectHyperslab(H5S_SELECT_SET, sel, off);
@@ -434,25 +644,10 @@ void convert_h5sam_to_h5samd(
 
         detail::write_strings_1d(out, "label_names", merged_labels.label_names());
         write_cube_shapes(out, cube_shapes);
-
-        {
-            const hsize_t dims = cube_resolutions.size();
-            H5::DataSpace space(1, &dims);
-            H5::DSetCreatPropList plist;
-            H5::DataSet dset = out.createDataSet("cube_resolutions",
-                                                 H5::PredType::NATIVE_DOUBLE, space, plist);
-            if (!cube_resolutions.empty()) {
-                dset.write(cube_resolutions.data(), H5::PredType::NATIVE_DOUBLE);
-            }
-        }
-        {
-            const hsize_t dims = scanlens.size();
-            H5::DataSpace space(1, &dims);
-            H5::DSetCreatPropList plist;
-            H5::DataSet dset = out.createDataSet("scanlens", H5::PredType::NATIVE_INT32,
-                                                 space, plist);
-            if (!scanlens.empty()) dset.write(scanlens.data(), H5::PredType::NATIVE_INT32);
-        }
+        write_f64_1d(out, "cube_resolutions", cube_resolutions);
+        write_f64_1d(out, "cube_samplerates", cube_samplerates);
+        write_i32_1d(out, "scanlens", scanlens);
+        write_i32_1d(out, "valid_scanlens", valid_scanlens);
         write_unsupervised(out, unsup);
     } catch (const H5::Exception&) {
         detail::rethrow_h5("convert_h5sam_to_h5samd(" + output_path.string() + ")");

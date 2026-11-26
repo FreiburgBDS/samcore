@@ -409,19 +409,34 @@ void bind_submodules(nb::module_& m) {
     io.def("convert_h5sam_to_h5samd",
            [](const std::vector<std::string>& input_paths,
               const std::string& output_path, float pad_value,
-              std::optional<bool> unsupervised) {
+              std::optional<bool> unsupervised, const std::string& merge,
+              size_t reference, std::optional<std::int64_t> max_shift,
+              double max_gate_loss, double threshold,
+              std::int64_t zgate_length) {
+               dataset_merge_options options;
+               options.mode = merge_mode_from_string(merge);
+               options.pad_value = pad_value;
+               options.reference = reference;
+               options.max_shift = max_shift.value_or(0);
+               options.max_gate_loss = max_gate_loss;
+               options.threshold = threshold;
+               options.zgate_length = zgate_length;
                std::vector<std::filesystem::path> paths;
                for (const auto& p : input_paths) paths.emplace_back(p);
                without_gil([&] {
                    samcore::io::convert_h5sam_to_h5samd(paths, output_path,
-                                                        pad_value,
+                                                        options,
                                                         unsupervised);
                });
            },
            nb::arg("input_paths"), nb::arg("output_path"),
            nb::arg("pad_value") = 0.0f, nb::arg("unsupervised") = nb::none(),
+           nb::arg("merge") = "crop", nb::arg("reference") = 0,
+           nb::arg("max_shift") = nb::none(),
+           nb::arg("max_gate_loss") = 1.0, nb::arg("threshold") = 0.2,
+           nb::arg("zgate_length") = 2000,
            nb::sig(
-               "def convert_h5sam_to_h5samd(input_paths: collections.abc.Sequence[str], output_path: str, pad_value: float = 0.0, unsupervised: bool | None = None) -> None"),
-           "Convert one or more .h5sam files into a .h5samd "
-                   "dataset, padding to the longest scan length.");
+               "def convert_h5sam_to_h5samd(input_paths: collections.abc.Sequence[str], output_path: str, pad_value: float = 0.0, unsupervised: bool | None = None, merge: str = 'crop', reference: int = 0, max_shift: int | None = None, max_gate_loss: float = 1.0, threshold: float = 0.2, zgate_length: int = 2000) -> None"),
+           "Convert one or more .h5sam files into a .h5samd dataset.\n\n"
+                   "``merge`` selects crop (default), pad, xcorr or zgate.");
 }

@@ -33,6 +33,19 @@ samcore::sam_scan make_cube(int nlines, int cols, int scanlen, int offset,
     return samcore::sam_scan::from_data(std::move(data), std::move(header));
 }
 
+samcore::sam_scan make_shifted_cube(
+    const std::vector<std::vector<std::int8_t>>& rows,
+    std::int64_t scanlen, double samplerate = 100.0) {
+    samcore::sam_header header(1, static_cast<std::int64_t>(rows.size()),
+                               scanlen, samplerate, 0, 1.0);
+    samcore::array2d<std::int8_t> data(rows.size(),
+                                       static_cast<size_t>(scanlen));
+    for (size_t i = 0; i < rows.size(); ++i) {
+        std::copy(rows[i].begin(), rows[i].end(), data[i].begin());
+    }
+    return samcore::sam_scan::from_data(std::move(data), std::move(header));
+}
+
 } // namespace
 
 using namespace samcore;
@@ -44,13 +57,15 @@ TEST(io_h5samd, ReadLegacyFile) {
     EXPECT_GT(ds.maxlen(), 0);
     EXPECT_GE(ds.cube_shapes().size(), 1);
     EXPECT_EQ(ds.cube_resolutions().size(), ds.cube_shapes().size());
+    EXPECT_EQ(ds.merge(), merge_mode::pad); // legacy files were padded
 }
 
 TEST(io_h5samd, RoundTrip) {
     sam_dataset ds({make_cube(3, 4, 100, 0, 1.0), make_cube(2, 5, 80, 7, 2.0)},
                    0.0f, true);
     EXPECT_EQ(ds.num_samples(), 3 * 4 + 2 * 5);
-    EXPECT_EQ(ds.maxlen(), 100);
+    EXPECT_EQ(ds.maxlen(), 80); // default merge crops to the shortest scan
+    EXPECT_EQ(ds.merge(), merge_mode::crop);
     EXPECT_TRUE(ds.unsupervised());
 
     const std::filesystem::path out = tmp_file("samcore_ds.h5samd");
@@ -60,6 +75,9 @@ TEST(io_h5samd, RoundTrip) {
     EXPECT_EQ(ds2.cube_shapes(), ds.cube_shapes());
     EXPECT_EQ(ds2.cube_resolutions(), ds.cube_resolutions());
     EXPECT_EQ(ds2.scanlens(), ds.scanlens());
+    EXPECT_EQ(ds2.valid_scanlens(), ds.valid_scanlens());
+    EXPECT_EQ(ds2.cube_samplerates(), ds.cube_samplerates());
+    EXPECT_EQ(ds2.merge(), ds.merge());
     EXPECT_TRUE(ds2.unsupervised());
     std::filesystem::remove(out);
 }
@@ -104,12 +122,136 @@ TEST(sam_dataset, SupervisedWithUnlabeledCubeThrows) {
 }
 
 TEST(sam_dataset, Padding) {
+    dataset_merge_options options;
+    options.mode = merge_mode::pad;
     sam_dataset ds({make_cube(2, 2, 100, 0, 1.0), make_cube(2, 2, 50, 0, 1.0)},
-                   0.0f, true);
+                   options, true);
     EXPECT_EQ(ds.maxlen(), 100);
     // second cube's rows are padded with 0 after sample 50
     EXPECT_FLOAT_EQ(ds.X()[4][99], 0.0f);
     EXPECT_NE(ds.X()[4][0], 0.0f);
+    EXPECT_EQ(ds.valid_scanlens(), (std::vector<std::int32_t>{100, 50}));
+}
+
+TEST(sam_dataset, DefaultCrop) {
+    sam_dataset ds({make_cube(2, 2, 100, 0, 1.0), make_cube(2, 2, 50, 0, 1.0)},
+                   0.0f, true);
+    EXPECT_EQ(ds.maxlen(), 50);
+    EXPECT_EQ(ds.merge(), merge_mode::crop);
+    EXPECT_EQ(ds.valid_scanlens(), (std::vector<std::int32_t>{50, 50}));
+}
+
+TEST(sam_dataset, MergeZgate) {
+    dataset_merge_options options;
+    options.mode = merge_mode::zgate;
+    options.threshold = 0.5;
+    options.zgate_length = 20;
+    sam_dataset ds({make_cube(2, 2, 100, 0, 1.0), make_cube(2, 2, 60, 7, 1.0)},
+                   options, true);
+    EXPECT_EQ(ds.maxlen(), 20);
+    EXPECT_EQ(ds.valid_scanlens(), (std::vector<std::int32_t>{20, 20}));
+    EXPECT_EQ(ds.merge(), merge_mode::zgate);
+}
+
+TEST(sam_dataset, MergeXcorrAlignsAcrossCubes) {
+    constexpr std::int64_t n = 200;
+    std::vector<std::int8_t> tmpl(n);
+    for (std::int64_t i = 0; i < n; ++i) {
+        tmpl[i] = static_cast<std::int8_t>(
+            static_cast<int>((i * 37 + 11) % 200) - 100);
+    }
+    std::vector<std::int8_t> delayed(n, 0), early(n, 0);
+    for (std::int64_t j = 7; j < n; ++j) delayed[j] = tmpl[j - 7];
+    for (std::int64_t j = 0; j + 5 < n; ++j) early[j] = tmpl[j + 5];
+
+    auto cube0 = make_shifted_cube({tmpl, delayed}, n);
+    auto cube1 = make_shifted_cube({early}, n);
+    dataset_merge_options options;
+    options.mode = merge_mode::xcorr;
+    options.max_shift = 30;
+    sam_dataset ds({cube0, cube1}, options, true);
+    EXPECT_LT(ds.maxlen(), 200u);
+    EXPECT_GT(ds.maxlen(), 180u);
+    for (std::size_t r = 0; r < ds.num_samples(); ++r) {
+        for (std::size_t j = 20; j + 20 < ds.maxlen(); ++j) {
+            EXPECT_FLOAT_EQ(ds.X()[r][j], ds.X()[0][j])
+                << "row " << r << " sample " << j;
+        }
+    }
+}
+
+TEST(sam_dataset, WholeDatasetAlignment) {
+    constexpr std::int64_t n = 200;
+    std::vector<std::int8_t> tmpl(n);
+    for (std::int64_t i = 0; i < n; ++i) {
+        tmpl[i] = static_cast<std::int8_t>(
+            static_cast<int>((i * 41 + 3) % 180) - 90);
+    }
+    std::vector<std::int8_t> delayed(n, 0);
+    for (std::int64_t j = 9; j < n; ++j) delayed[j] = tmpl[j - 9];
+    auto scan = make_shifted_cube({tmpl, delayed}, n);
+    sam_dataset ds({scan}, 0.0f, true);
+    auto aligned = ds.copy();
+    aligned.align_xcorr(0, 30);
+    EXPECT_EQ(aligned.maxlen(), 191);
+    EXPECT_EQ(ds.maxlen(), 200);
+    for (std::size_t j = 20; j + 20 < aligned.maxlen(); ++j) {
+        EXPECT_FLOAT_EQ(aligned.X()[1][j], aligned.X()[0][j]);
+    }
+
+    std::vector<std::int32_t> starts{0, 5};
+    auto manual = ds.copy();
+    manual.align_manual(starts, 100);
+    EXPECT_EQ(manual.maxlen(), 100);
+    EXPECT_FLOAT_EQ(manual.X()[1][0], ds.X()[1][5]);
+
+    auto zg = ds.copy();
+    zg.align_zgate(0.5, 20);
+    EXPECT_EQ(zg.maxlen(), 20);
+}
+
+TEST(sam_dataset, SpectralMethodsMatchCubes) {
+    auto scan0 = make_shifted_cube(
+        std::vector<std::vector<std::int8_t>>(
+            2, std::vector<std::int8_t>(128, 10)),
+        128);
+    auto scan1 = make_shifted_cube(
+        std::vector<std::vector<std::int8_t>>(
+            2, std::vector<std::int8_t>(128, -5)),
+        128);
+    for (size_t j = 0; j < 128; ++j) {
+        scan0.data()[0][j] = static_cast<std::int8_t>((j * 3) % 100 - 50);
+        scan0.data()[1][j] = scan0.data()[0][j];
+        scan1.data()[0][j] = static_cast<std::int8_t>((j * 5) % 100 - 50);
+        scan1.data()[1][j] = scan1.data()[0][j];
+    }
+    sam_dataset ds({scan0, scan1}, 0.0f, true);
+    ASSERT_TRUE(ds.samplerate().has_value());
+    EXPECT_DOUBLE_EQ(*ds.samplerate(), 100.0);
+
+    const auto p = ds.psd(32, 16);
+    EXPECT_EQ(p.psd.rows(), 4);
+    const auto parts = ds.psd_by_cube(32, 16);
+    ASSERT_EQ(parts.size(), 2u);
+    EXPECT_EQ(parts[0].psd.rows(), 2u);
+    EXPECT_EQ(parts[1].psd.rows(), 2u);
+
+    const auto s = ds.spectrum();
+    EXPECT_EQ(s.mag.rows(), 4);
+    EXPECT_EQ(s.mag.cols(), 65);
+    const auto spec_parts = ds.spectrum_by_cube();
+    EXPECT_EQ(spec_parts.size(), 2u);
+
+    const auto peaks = ds.stft_peak_frequency(32, 16);
+    EXPECT_EQ(peaks.size(), 4u);
+
+    auto scan_psd = scan0.psd(32, 16);
+    for (size_t r = 0; r < 2; ++r) {
+        ASSERT_EQ(p.psd.cols(), scan_psd.psd.cols());
+        for (size_t k = 0; k < p.psd.cols(); ++k) {
+            EXPECT_FLOAT_EQ(p.psd[r][k], scan_psd.psd[r][k]);
+        }
+    }
 }
 
 TEST(sam_dataset, SpatialProvenance) {
