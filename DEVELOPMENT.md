@@ -179,6 +179,60 @@ cmake --build build
 | `SAMCORE_ENABLE_FAST_MATH` | `ON` | Enable `-ffast-math` in Release builds. |
 | `SAMCORE_ENABLE_LTO` | `ON` | Enable `-flto` in Release builds (forced off on musl). |
 
+## File formats
+
+The two formats are the core of the package:
+
+**`.h5sam`: one SAM acquisition** (a single scan cube) stored as an HDF5 file:
+
+- `header` group holds acquisition metadata as attributes (units follow the
+  package convention: **MHz** for frequencies, **µm** for lateral distances,
+  **ns** for time):
+
+  | attribute | meaning | unit |
+  | --- | --- | --- |
+  | `nlines` | number of scan lines | — |
+  | `scanspline` | scans per line | — |
+  | `scanlen` | samples per A-scan | — |
+  | `samplerate` | sampling rate | MHz |
+  | `tzero` | time of sample 0 (`time()`, `tof`, gates) | ns |
+  | `resolution` | lateral pixel size | µm |
+  | `downsample_factor` | decimation factor already applied | — |
+  | `interpolated`, `quality` | acquisition flags | — |
+  | `mode`, `transducer_in`, `transducer_through`, `cellid` | acquisition strings | — |
+
+  Arbitrary extra attributes are preserved on round-trip.  Spectral APIs
+  return frequency bins in **Hz** and STFT/spectrogram time bins in
+  **seconds** (`f_min`/`f_max` in Hz); `SAMDataset.spatial` x/y are in
+  **mm** and `thickness()` returns **meters**.
+- `data`: the raw int8 signals, shape `(nlines * scanspline, scanlen)`,
+  gzip-compressed.  With `lazy=True` only the requested rows are read;
+  `data` materializes the full array on first access.
+- `labels` / `label_names`: optional per-scan integer labels and their names.
+- `starts`: optional int32 per-scan start index for time-aligned or
+  Z-gated data (`-1` marks an unaligned scan).
+
+**`.h5samd`: a SAM dataset** pooled from one or more `.h5sam` cubes and used
+for training and analysis:
+
+- `X`: float32 signals of shape `(n_samples, common_length)`.  The default
+  `merge="crop"` keeps the leading `min(scanlens)` samples; `"pad"` retains
+  longest-length padding, `"xcorr"` aligns all rows to one pooled reference,
+  and `"zgate"` applies threshold alignment.
+- `labels` / `label_names`: optional per-sample labels, plus an
+  `unsupervised` flag.
+- `cube_shapes`, `cube_resolutions`, `scanlens`, `valid_scanlens`,
+  `cube_samplerates`: provenance that maps every sample back to its source
+  cube (shape in lines × scans, resolution in µm/pixel, original and currently
+  valid lengths in samples, and sampling rate in MHz); `SAMDataset.spatial`
+  turns this into per-sample x/y pixel-centre coordinates in mm.
+- `merge_mode` and `pad_value`: the construction policy and padding value used
+  when applicable.
+- `Z`: an optional feature matrix, and `V` an optional low-dimensional
+  embedding.
+
+Both formats carry a `samcore_format_version` attribute on the file root.
+
 ## Maintenance & Testing
 
 ### Python type stubs
@@ -248,6 +302,22 @@ pip install torch --index-url https://download.pytorch.org/whl/cpu
 # or, via the optional extra: pip install ".[test,test-torch]"
 pytest tests/python
 ```
+
+The scipy spectral-feature parity tests
+(`tests/python/test_spectral_features.py`) use `pytest.importorskip("scipy")`
+and skip when SciPy is unavailable:
+
+```sh
+pip install scipy
+pytest tests/python/test_spectral_features.py
+```
+
+`samcore.utils.spectrogram_features` is intentionally scipy-compatible:
+periodic `hann`/`hamming`/`cosine` windows, `mode="psd"`,
+`scaling="density"`, `detrend=False`, frequency-major flattening and optional
+per-row L1 normalization over the retained band.  It is float32 in/out and
+targets float32-level agreement, not bitwise parity with SciPy's float64
+internals.
 
 To run the Python extension under sanitizers, install the Debug configuration
 and preload the ASan runtime:

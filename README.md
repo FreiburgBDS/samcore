@@ -4,145 +4,55 @@
 **Python package and C++ library for Scanning Acoustic Microscopy (SAM) data processing.**
 
 samcore is a library for non-destructive testing (NDT) with Scanning Acoustic
-Microscopy (SAM), a domain where it is mainly used for the acoustic inspection
-of battery cells (internal structure, defects, wetting and layer integrity)
-and, more generally, for materials and component testing.  A focused
-ultrasound transducer is raster-scanned over a sample and records an A-scan at
-every pixel, either in echo (reflection) or through-transmission mode, so
-a single measurement yields a 3-D signal cube.  samcore turns those cubes into
-C-scan images, spectra and ready-to-train machine-learning datasets.
+Microscopy (SAM), mainly used for the acoustic inspection of battery cells
+and materials. A focused ultrasound transducer is raster-scanned over a sample
+to record a 3-D signal cube, which samcore turns into C-scan images, spectra
+and ready-to-train machine-learning datasets.
 
-## Overview
+## Features
 
-### Features
+- **`.h5sam` / `.h5samd` I/O**: native HDF5 formats for single cubes and pooled
+  datasets, with lazy signal loading.
+- **Imaging & analysis**: C-scan reduction, filtering, gating, envelope and
+  phase statistics, STFT and Welch PSD.
+- **ML-ready datasets**: common-length `SAMDataset`s with labels, splits,
+  batch/patch iteration, NumPy and optional PyTorch interop.
+- **Fast C++ core**: the same functionality as `libsamcore`,
+  OpenMP-parallelized and GIL-releasing for Python.
 
-- **`.h5sam` / `.h5samd` file formats**: native HDF5-based I/O for single
-  acquisition cubes and pooled datasets, including lazy reading of signal
-  data (`SAMScan(path, lazy=True)`).
-- **C-scan imaging**: reduce every A-scan to one pixel
-  (`scan.image("max" | "absmax" | "power")`) and normalize the raw int8
-  signals to `[-1, 1)` (`scan.normalized_data()`).
-- **Signal processing**: built-in strategies `lp`, `bp`, `normalize`,
-  `savgol`, `medfilt`, `gate`, `detrend`, `envelope`, `analytic` and
-  `moving_average`, plus circular phase statistics (`phase_stats`) derived
-  from the Hilbert analytic signal.
-- **Spectral analysis**: one-sided STFT, Welch PSD and per-frame power
-  spectrograms of every A-scan, with optional `f_min`/`f_max` band limits;
-  batched `scan.spectrum()` FFT magnitudes and `stft_peak_frequency()` /
-  `stft_peak_time()` reduction images.
-- **Cube manipulation**: downsample, rotate, mirror, rectangular/sample/time
-  selection and Z-gating, all with in-place and copy variants.
-- **Labels**: per-scan class labels (`SAMLabels`) with label names, masks
-  (healthy/labeled/unlabeled), class distributions and registry editing
-  (`add_label`, `rename_label`, `delete_label`).
-- **Datasets for ML**: pool one or more cubes into a padded `SAMDataset`,
-  merge labels, split train/test (random, stratified, or by cube), apply
-  feature transforms (`Z`) and iterate minibatches or spatial patches.
-- **Interop**: `np.asarray(scan)`, `np.asarray(dataset)` and
-  `np.asarray(labels)` work through the NumPy `__array__` protocol
-  (zero-copy when no dtype conversion is requested); the optional
-  `samcore.interop` helpers (`tensor`, `TorchDataset`, `TorchDataLoader`)
-  import PyTorch lazily and are never required by `import samcore`.
-- **Fast C++ core**: the same functionality is available from C++ as `libsamcore`, parallelized with OpenMP; long-running operations release the Python GIL.
-
-### File formats
-
-The two formats are the core of the package:
-
-**`.h5sam`: one SAM acquisition** (a single scan cube) stored as an HDF5 file:
-
-- `header` group holds acquisition metadata as attributes (units follow the
-  package convention: **MHz** for frequencies, **µm** for lateral distances,
-  **ns** for time):
-
-  | attribute | meaning | unit |
-  | --- | --- | --- |
-  | `nlines` | number of scan lines | — |
-  | `scanspline` | scans per line | — |
-  | `scanlen` | samples per A-scan | — |
-  | `samplerate` | sampling rate | MHz |
-  | `tzero` | time of sample 0 (`time()`, `tof`, gates) | ns |
-  | `resolution` | lateral pixel size | µm |
-  | `downsample_factor` | decimation factor already applied | — |
-  | `interpolated`, `quality` | acquisition flags | — |
-  | `mode`, `transducer_in`, `transducer_through`, `cellid` | acquisition strings | — |
-
-  Arbitrary extra attributes are preserved on round-trip.  Spectral APIs
-  return frequency bins in **Hz** and STFT/spectrogram time bins in
-  **seconds** (`f_min`/`f_max` in Hz); `SAMDataset.spatial` x/y are in
-  **mm** and `thickness()` returns **meters**.
-- `data`: the raw int8 signals, shape `(nlines * scanspline, scanlen)`,
-  gzip-compressed.  With `lazy=True` only the requested rows are read;
-  `data` materializes the full array on first access.
-- `labels` / `label_names`: optional per-scan integer labels and their names.
-- `starts`: optional int32 per-scan start index for time-aligned or
-  Z-gated data (`-1` marks an unaligned scan).
-
-**`.h5samd`: a SAM dataset** pooled from one or more `.h5sam` cubes and used
-for training and analysis:
-
-- `X`: float32 signals of shape `(n_samples, maxlen)`, zero-padded to the
-  longest A-scan.
-- `labels` / `label_names`: optional per-sample labels, plus an
-  `unsupervised` flag.
-- `cube_shapes`, `cube_resolutions`, `scanlens`: provenance that maps every
-  sample back to its source cube (shape in lines × scans, resolution in
-  µm/pixel, scan lengths in samples); `SAMDataset.spatial` turns this into
-  per-sample x/y pixel-centre coordinates in mm.
-- `Z`: an optional feature matrix, and `V` an optional low-dimensional
-  embedding.
-
-Both formats carry a `samcore_format_version` attribute on the file root.
+The on-disk layout of both formats is documented in
+[DEVELOPMENT.md](https://github.com/FreiburgBDS/samcore/blob/main/DEVELOPMENT.md#file-formats).
 
 ## Installation
 
 ```sh
 pip install samcore
 ```
-To build from source instead, see [DEVELOPMENT.md](https://github.com/FreiburgBDS/samcore/blob/main/DEVELOPMENT.md).
+
+To build from source, see [DEVELOPMENT.md](https://github.com/FreiburgBDS/samcore/blob/main/DEVELOPMENT.md).
 
 ## Python usage
 
 ```python
 import samcore
 
-# Load one acquisition grid
-scan = samcore.SAMScan("cell.h5sam")
+scan = samcore.SAMScan("cell.h5sam")             # one acquisition grid
+cscan = scan.image("absmax")                     # C-scan, shape (nlines, cols)
 
-print(scan.header.cellid, scan.nlines, scan.cols, scan.scanlen)
-print("time axis [ns]:", scan.time()[:5])
-
-# Reduce every A-scan to a single pixel -> C-scan image of shape (nlines, cols)
-cscan = scan.image("absmax")
-
-# Pool one or more cubes into a padded, label-aware dataset
-dataset = samcore.SAMDataset([scan])
-dataset.preprocess("lp", cutoff=10.0, fs=625.0)   # MHz
+dataset = samcore.SAMDataset([scan])             # crops to the shortest scan
+dataset.preprocess("lp", cutoff=10.0, fs=625.0)  # MHz
 dataset.train_test_split(test_size=0.2, random_state=0)
 
 for X, y, spatial in dataset.batches(batch_size=64):
-    # X: (batch, maxlen) float32 signals; y: int8 labels;
-    # spatial: recarray with the source cube index (idx) and the
-    # pixel-centre coordinates in mm (x, y).
-    # Unsupervised datasets yield (X, spatial) instead.
-    ...
+    ...  # X: signals, y: labels, spatial: source cube and x/y in mm
 
 dataset.save("cells.h5samd")
-loaded = samcore.SAMDataset.load("cells.h5samd")
 ```
 
-Several `.h5sam` files can be converted into a dataset in one call:
-
-```python
-samcore.io.convert_h5sam_to_h5samd(
-    ["cell_a.h5sam", "cell_b.h5sam"], "cells.h5samd"
-)
-```
-
-`scan.data` and `dataset.X` are zero-copy numpy views of the C++ buffers, so
-inspection and slicing do not duplicate the signal data.  `SAMDataset` also
-provides `cube_batches()` and `spatial_patches()` iterators for 2-D CNN
-workflows, and `transform()` to build a feature matrix `Z`.
+Use `merge="pad"` to keep longest-length padding instead of cropping.
+`scan.data` and `dataset.X` are zero-copy NumPy views, and
+`samcore.utils.spectrogram_features()` builds flattened features for NMF
+pipelines.
 
 ## C++ usage
 
@@ -151,34 +61,23 @@ workflows, and `transform()` to build a feature matrix `Z`.
 #include <samcore/sam_dataset.hpp>
 
 int main() {
-    auto scan = samcore::sam_scan::from_file("cell.h5sam"); // .h5sam files
-
-    auto cscan = scan.image_absmax(); // C-scan image
+    auto scan = samcore::sam_scan::from_file("cell.h5sam");
+    auto cscan = scan.image_absmax();
 
     samcore::sam_dataset dataset({scan});
     samcore::preprocess_args args;
-    args.cutoff = 10.0;   // MHz
-    args.fs = 625.0;      // MHz
+    args.cutoff = 10.0;  // MHz
+    args.fs = 625.0;     // MHz
     dataset.preprocess("lp", args);
 
     dataset.save("cells.h5samd");
 }
 ```
 
-Install the library with `cmake --install build` and consume it in downstream
-CMake projects:
-
-```cmake
-find_package(samcore REQUIRED)
-target_link_libraries(myapp PRIVATE samcore::samcore)
-```
-
-Note: OpenMP is an implementation detail of the static library and is not
-propagated through the CMake package.  Consumers linking `libsamcore.a`
-enable it themselves (`find_package(OpenMP)` + link `OpenMP::OpenMP_CXX`).
+Install the library with `cmake --install build` and link `samcore::samcore`
+via `find_package(samcore REQUIRED)`.
 
 ## Development
 
-For building from source, system dependencies, C++ build options, the optional executables, 
-stub regeneration and the test suites, see
-[DEVELOPMENT.md](https://github.com/FreiburgBDS/samcore/blob/main/DEVELOPMENT.md).
+See [DEVELOPMENT.md](https://github.com/FreiburgBDS/samcore/blob/main/DEVELOPMENT.md)
+for build instructions, dependencies, file formats and the test suites.
