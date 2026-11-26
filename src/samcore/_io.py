@@ -87,10 +87,19 @@ class io:
     @staticmethod
     def convert_h5sam_to_h5samd(input_paths: List[str], output_path: str,
                                 pad_value: float = 0.0,
-                                unsupervised: Optional[bool] = None) -> None:
+                                unsupervised: Optional[bool] = None,
+                                merge: str = "crop",
+                                reference: int = 0,
+                                max_shift: Optional[int] = None,
+                                max_gate_loss: float = 1.0,
+                                threshold: float = 0.2,
+                                zgate_length: int = 2000) -> None:
         """Convert one or more .h5sam files into a .h5samd dataset.
 
-        Signals are padded to the longest scan length.
+        Signals are combined according to ``merge``: ``'crop'`` keeps the
+        leading samples up to the shortest scan, ``'pad'`` retains the legacy
+        longest-length padding, ``'xcorr'`` aligns all rows to one pooled
+        reference, and ``'zgate'`` threshold-aligns every row.
 
         Parameters
         ----------
@@ -99,10 +108,23 @@ class io:
         output_path : str
             Destination .h5samd path.
         pad_value : float, optional
-            Value used to pad shorter signals.
+            Value used by ``merge='pad'``.
         unsupervised : bool or None, optional
             When True labels are discarded; when False labels are required.
             None (default) auto-detects from whether any cube is labeled.
+        merge : str, optional
+            Merge policy: 'crop' (default), 'pad', 'xcorr' or 'zgate'.
+        reference : int, optional
+            Pooled row used as the xcorr reference.  Default 0.
+        max_shift : int or None, optional
+            Maximum xcorr lag; None means ``min(scanlens) // 4``.
+        max_gate_loss : float, optional
+            Maximum xcorr lag spread as a fraction of the common prefix.
+        threshold : float, optional
+            Zgate threshold fraction of the int8 full scale.
+        zgate_length : int, optional
+            Zgate output window in samples.  Default 2000.
         """
-        _io.convert_h5sam_to_h5samd(list(input_paths), output_path,
-                                    pad_value, unsupervised)
+        _io.convert_h5sam_to_h5samd(
+            list(input_paths), output_path, pad_value, unsupervised, merge,
+            reference, max_shift, max_gate_loss, threshold, zgate_length)

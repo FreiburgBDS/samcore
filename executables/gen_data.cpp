@@ -235,6 +235,7 @@ void write_h5samd(const config& c, const std::filesystem::path& out) {
 
     std::vector<std::pair<std::int32_t, std::int32_t>> shapes;
     std::vector<double> resolutions;
+    std::vector<double> samplerates;
     std::vector<std::int32_t> scanlens;
     samcore::array2d<float> x(per_cube * static_cast<size_t>(c.cubes),
                               static_cast<size_t>(c.scanlen));
@@ -249,12 +250,15 @@ void write_h5samd(const config& c, const std::filesystem::path& out) {
         shapes.emplace_back(static_cast<std::int32_t>(c.scans_y),
                             static_cast<std::int32_t>(c.scans_x));
         resolutions.push_back(c.resolution);
+        samplerates.push_back(c.samplerate);
         scanlens.push_back(static_cast<std::int32_t>(c.scanlen));
     }
 
     // Unsupervised dataset: no labels.
     samcore::io::write_h5samd(out, x, std::nullopt, shapes, resolutions,
-                              scanlens, true, std::nullopt, std::nullopt);
+                              scanlens, scanlens, samplerates,
+                              samcore::merge_mode::crop, 0.0f, true,
+                              std::nullopt, std::nullopt);
 
     std::printf("wrote %s: %d cubes of %d x %d scans, scanlen %d\n", out.c_str(),
                 c.cubes, c.scans_x, c.scans_y, c.scanlen);

@@ -3,12 +3,27 @@
 #include <complex>
 #include <cstddef>
 #include <span>
+#include <stdexcept>
+#include <string>
 #include <utility>
 #include <vector>
 
 #include <samcore/array.hpp>
 
 namespace samcore::signal {
+
+// Periodic (scipy `fftbins=True`) analysis windows.
+enum class window_kind { hann, hamming, cosine };
+
+[[nodiscard]] inline window_kind window_kind_from_string(
+    const std::string& name) {
+    if (name == "hann") return window_kind::hann;
+    if (name == "hamming") return window_kind::hamming;
+    if (name == "cosine") return window_kind::cosine;
+    throw std::invalid_argument(
+        "Unknown window: '" + name +
+        "' (expected 'hann', 'hamming' or 'cosine').");
+}
 
 struct stft_result {
     std::vector<float> f;    // (n_freqs,) one-sided bins
@@ -25,6 +40,24 @@ struct spectrogram_result {
     std::vector<float> f;      // (n_freqs,)
     std::vector<float> t;      // (n_frames,) seconds
     array3d<float> sxx;        // (n_signals, n_freqs, n_frames)
+};
+
+// Flattened spectrogram feature matrix:
+//   index = kept_frequency_index * n_frames + frame_index
+// This is scipy's Sxx[:, band, :].reshape(n_signals, -1) ordering.
+struct spectrogram_features_result {
+    array2d<float> features;
+    std::vector<double> f;
+    std::vector<double> t;
+};
+
+struct spectrogram_feature_options {
+    size_t nperseg = 128;
+    size_t noverlap = 96;
+    window_kind window = window_kind::hann;
+    double f_min = 0.0;
+    double f_max = 0.0;
+    bool l1_normalize = false;
 };
 
 // One-sided FFT magnitude of every signal (numpy.fft.rfft parity).
@@ -49,7 +82,11 @@ struct stft_peaks_result {
 [[nodiscard]] std::vector<double> irfft(
     std::span<const std::complex<double>> X, size_t n);
 
-// Periodic ("fftbins=True") Hann window of length n: 0.5-0.5*cos(2*pi*k/n).
+// Periodic ("fftbins=True") window coefficients matching
+// scipy.signal.get_window(name, n, fftbins=True).  n == 1 returns {1}.
+[[nodiscard]] std::vector<double> make_window(window_kind kind, size_t n);
+
+// Backwards-compatible periodic Hann window.
 [[nodiscard]] std::vector<double> hann_window(size_t n);
 
 // Spectral estimators (scipy.signal parity)
@@ -59,19 +96,29 @@ struct stft_peaks_result {
 // returned (f_max = 0 means Nyquist).
 [[nodiscard]] stft_result stft(const array2d<float>& data, double fs,
                                size_t nperseg, size_t noverlap,
-                               double f_min = 0.0, double f_max = 0.0);
+                               double f_min = 0.0, double f_max = 0.0,
+                               window_kind window = window_kind::hann);
 
 // Welch PSD, scaling='density', detrend=False, averaged over frames.
 [[nodiscard]] psd_result welch_psd(const array2d<float>& data, double fs,
                                    size_t nperseg, size_t noverlap,
-                                   double f_min = 0.0, double f_max = 0.0);
+                                   double f_min = 0.0, double f_max = 0.0,
+                                   window_kind window = window_kind::hann);
 
 // Per-frame power spectral density (scipy.signal.spectrogram, mode='psd').
 [[nodiscard]] spectrogram_result spectrogram_psd(const array2d<float>& data,
                                                  double fs, size_t nperseg,
                                                  size_t noverlap,
                                                  double f_min = 0.0,
-                                                 double f_max = 0.0);
+                                                 double f_max = 0.0,
+                                                 window_kind window =
+                                                     window_kind::hann);
+
+// Flattened per-frame PSD features: band-limit, C-order flatten
+// (frequency-major, then frame), then optional per-row L1 normalization.
+[[nodiscard]] spectrogram_features_result spectrogram_features(
+    const array2d<float>& data, double fs,
+    const spectrogram_feature_options& options = {});
 
 // Per-signal peaks of the STFT magnitude: the frequency with the largest
 // max-over-frames magnitude and the time with the largest max-over-frequencies
@@ -79,7 +126,9 @@ struct stft_peaks_result {
 [[nodiscard]] stft_peaks_result stft_peaks(const array2d<float>& data,
                                            double fs, size_t nperseg,
                                            size_t noverlap, double f_min = 0.0,
-                                           double f_max = 0.0);
+                                           double f_max = 0.0,
+                                           window_kind window =
+                                               window_kind::hann);
 
 // One-sided FFT magnitude of every signal, batched through pocketfft.  d is
 // the sample spacing (1/fs) for the frequency axis; values match
@@ -161,6 +210,11 @@ butter_bandpass(double cutoff_low, double cutoff_high, double fs);
 // positive lag and then the smaller |lag|.
 [[nodiscard]] std::int64_t xcorr_lag(std::span<const std::int8_t> x,
                                      std::span<const std::int8_t> ref,
+                                     std::int64_t max_shift);
+
+// float32 overload used by dataset-wide alignment (identical semantics).
+[[nodiscard]] std::int64_t xcorr_lag(std::span<const float> x,
+                                     std::span<const float> ref,
                                      std::int64_t max_shift);
 
 } // namespace samcore::signal

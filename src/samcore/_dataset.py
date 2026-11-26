@@ -97,6 +97,123 @@ def preprocess(self: SAMDataset, strategy: str, **kwargs: object) -> SAMDataset:
     return self
 
 
+def align_manual(self: SAMDataset, starts: NDArray[np.int32],
+                 scanlen: int, in_place: bool = False) -> SAMDataset:
+    """Align all dataset rows to manually supplied window starts.
+
+    ``starts`` are offsets relative to each row's current window; -1 marks
+    an unaligned row and zero-fills it.
+
+    Parameters
+    ----------
+    starts : ndarray (int32)
+        One start offset per dataset row.
+    scanlen : int
+        Common output window length in samples.
+    in_place : bool, optional
+        If True, modify this dataset and return ``self``.  Default False:
+        a new dataset is returned.
+    """
+    arr = np.asarray(starts, dtype=np.int32)
+    if not in_place:
+        h = self.copy()
+        h._align_manual(arr, int(scanlen))  # type: ignore[attr-defined]
+        return h
+    self._align_manual(arr, int(scanlen))  # type: ignore[attr-defined]
+    return self
+
+
+def align_xcorr(self: SAMDataset, reference: int = 0,
+                max_shift: Optional[int] = None,
+                max_gate_loss: float = 1.0,
+                in_place: bool = False) -> SAMDataset:
+    """Align every dataset row to one pooled reference by xcorr.
+
+    The reference is a flattened dataset row, so alignment spans cube
+    boundaries.  The common overlap is kept, reducing the stored signal
+    length by the lag spread.
+
+    Parameters
+    ----------
+    reference : int, optional
+        Flat dataset row used as reference.  Default 0.
+    max_shift : int or None, optional
+        Maximum absolute lag in samples; None means ``maxlen // 4``.
+    max_gate_loss : float, optional
+        Maximum lag spread as a fraction of the current signal length.
+    in_place : bool, optional
+        If True, modify this dataset and return ``self``.  Default False.
+    """
+    shift = 0 if max_shift is None else int(max_shift)
+    args = (int(reference), shift, float(max_gate_loss))
+    if not in_place:
+        h = self.copy()
+        h._align_xcorr(*args)  # type: ignore[attr-defined]
+        return h
+    self._align_xcorr(*args)  # type: ignore[attr-defined]
+    return self
+
+
+def align_zgate(self: SAMDataset, threshold: float = 0.2,
+                length: int = 2000,
+                in_place: bool = False) -> SAMDataset:
+    """Threshold-align every dataset row to a common window length.
+
+    For each row the first sample whose absolute value reaches
+    ``threshold * 127`` is selected and ``length`` samples are kept from
+    there (clamped so the window fits).  Rows without a crossing are
+    zero-filled.
+
+    Parameters
+    ----------
+    threshold : float, optional
+        Fraction of the int8 full scale.  Default 0.2.
+    length : int, optional
+        Output window length in samples.  Default 2000.
+    in_place : bool, optional
+        If True, modify this dataset and return ``self``.  Default False.
+    """
+    if not in_place:
+        h = self.copy()
+        h._align_zgate(threshold, int(length))  # type: ignore[attr-defined]
+        return h
+    self._align_zgate(threshold, int(length))  # type: ignore[attr-defined]
+    return self
+
+
+def align_tof(self: SAMDataset, gate_ns: float, reference: int = 0,
+              start_ns: float = 0.0, max_gate_loss: float = 1.0,
+              in_place: bool = False) -> SAMDataset:
+    """Align all dataset rows to the reference envelope peak.
+
+    Requires a common ``samplerate``.  The gate is
+    ``[start_ns, start_ns + gate_ns)`` relative to each signal start (the
+    dataset does not store absolute ``tzero``); all cubes must also have the
+    same valid signal length.  Rows without a peak get zero-filled.
+
+    Parameters
+    ----------
+    gate_ns : float
+        Gate length in ns.
+    reference : int, optional
+        Flat dataset row used as reference.  Default 0.
+    start_ns : float, optional
+        Gate start offset in ns.  Default 0.
+    max_gate_loss : float, optional
+        Maximum peak spread as a fraction of the current signal length.
+    in_place : bool, optional
+        If True, modify this dataset and return ``self``.  Default False.
+    """
+    args = (float(gate_ns), int(reference), float(start_ns),
+            float(max_gate_loss))
+    if not in_place:
+        h = self.copy()
+        h._align_tof(*args)  # type: ignore[attr-defined]
+        return h
+    self._align_tof(*args)  # type: ignore[attr-defined]
+    return self
+
+
 def transform(self: SAMDataset,
               fn: Callable[[NDArray[np.float32]], NDArray[np.float32]]
               ) -> NDArray[np.float32]:
@@ -105,7 +222,7 @@ def transform(self: SAMDataset,
     Parameters
     ----------
     fn : callable
-        ``fn(data_2d) -> array``.  Receives the full padded signal array
+        ``fn(data_2d) -> array``.  Receives the stored signal matrix
         and must return a 1-D or 2-D array whose first dimension matches
         ``len(self)``.
 
@@ -596,8 +713,8 @@ def __array__(self: SAMDataset, dtype: Any = None,
     """Signal matrix ``X`` as a NumPy float32 array.
 
     ``np.asarray(dataset)`` returns ``X`` of shape
-    ``(num_samples, maxlen)`` as a zero-copy view when no dtype conversion
-    is requested.
+    ``(num_samples, common_length)`` as a zero-copy view when no dtype
+    conversion is requested.
     """
     return array_view(self.X, dtype, copy)
 
@@ -610,7 +727,8 @@ def __array__(self: SAMDataset, dtype: Any = None,
 # (class -> patched function -> module globals -> class); reference counting
 # alone then releases everything at interpreter shutdown on every platform.
 _PATCHED = (
-    preprocess, transform, train_test_split, stratified_train_test_split,
+    preprocess, transform, align_manual, align_xcorr, align_zgate, align_tof,
+    train_test_split, stratified_train_test_split,
     stratified_split_by_cube, split_by_label, batches, cube_batches,
     spatial_patches, to_numpy, to_dict, relabel, num_train_batches,
     num_test_batches, _require_labels, __len__, __iter__, __array__,
@@ -623,8 +741,9 @@ for _fn in _PATCHED:
     # is deleted from this module's namespace below.
     _fn.__annotations__ = _fn.__annotations__
 
-del (_PATCHED, _fn, preprocess, transform, train_test_split,
-     stratified_train_test_split, stratified_split_by_cube, split_by_label,
-     batches, cube_batches, spatial_patches, to_numpy, to_dict, relabel,
-     num_train_batches, num_test_batches, _require_labels, __len__,
-     __iter__, __array__, SAMDataset)
+del (_PATCHED, _fn, preprocess, transform, align_manual, align_xcorr,
+     align_zgate, align_tof, train_test_split, stratified_train_test_split,
+     stratified_split_by_cube, split_by_label, batches, cube_batches,
+     spatial_patches, to_numpy, to_dict, relabel, num_train_batches,
+     num_test_batches, _require_labels, __len__, __iter__, __array__,
+     SAMDataset)

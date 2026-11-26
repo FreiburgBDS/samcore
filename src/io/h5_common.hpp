@@ -82,29 +82,29 @@ namespace samcore::io::detail {
 }
 
 // Write a string attribute as variable-length UTF-8, exactly like h5py.
-inline void write_string_attr(H5::Group& group, const std::string& name,
+inline void write_string_attr(H5::H5Object& object, const std::string& name,
                               const std::string& value) {
     H5::DataSpace dspace(H5S_SCALAR);
     H5::StrType stype(H5::PredType::C_S1, H5T_VARIABLE);
     H5Tset_cset(stype.getId(), H5T_CSET_UTF8);
-    H5::Attribute attr = group.createAttribute(name, stype, dspace);
+    H5::Attribute attr = object.createAttribute(name, stype, dspace);
     const char* cstr = value.c_str();
     attr.write(stype, &cstr);
 }
 
-inline void write_int_attr(H5::Group& group, const std::string& name,
+inline void write_int_attr(H5::H5Object& object, const std::string& name,
                            std::int64_t value) {
     H5::DataSpace dspace(H5S_SCALAR);
     H5::Attribute attr =
-        group.createAttribute(name, H5::PredType::NATIVE_INT64, dspace);
+        object.createAttribute(name, H5::PredType::NATIVE_INT64, dspace);
     attr.write(H5::PredType::NATIVE_INT64, &value);
 }
 
-inline void write_double_attr(H5::Group& group, const std::string& name,
+inline void write_double_attr(H5::H5Object& object, const std::string& name,
                               double value) {
     H5::DataSpace dspace(H5S_SCALAR);
     H5::Attribute attr =
-        group.createAttribute(name, H5::PredType::NATIVE_DOUBLE, dspace);
+        object.createAttribute(name, H5::PredType::NATIVE_DOUBLE, dspace);
     attr.write(H5::PredType::NATIVE_DOUBLE, &value);
 }
 

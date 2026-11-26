@@ -11,6 +11,7 @@
 
 #include <samcore/array.hpp>
 #include <samcore/sam_labels.hpp>
+#include <samcore/sam_merge.hpp>
 #include <samcore/sam_scan.hpp>
 
 namespace samcore {
@@ -45,12 +46,13 @@ struct preprocess_args {
     size_t window = 5;        // samples
 };
 
-// Collection of SAM A-scans pooled from one or more scan cubes,
-// zero-padded to a common length with spatial provenance per row.
-// Provides: construction
-// from handlers, padding/concatenation, label merging, serialization
-// as .h5samd, preprocessing and cube extraction.  ML iteration
-// (batches/splits/patches) is deliberately not part of the C++ API.
+// Collection of SAM A-scans pooled from one or more scan cubes.  Scans are
+// combined by the selected merge policy (crop to the shortest, pad, global
+// xcorr alignment, or zgate alignment) with spatial provenance per row.
+// Provides: construction from handlers, label merging, serialization as
+// .h5samd, preprocessing, alignment, spectral analysis and cube extraction.
+// ML iteration (batches/splits/patches) is deliberately not part of the C++
+// API.
 class sam_dataset {
 public:
     sam_dataset() = default;
@@ -64,11 +66,18 @@ public:
     // A lazy-mode dataset is materialized first.
     [[nodiscard]] sam_dataset copy() const;
 
-    // Build from one or more scan handlers.  Signals are converted to
-    // float32 and zero-padded (pad_value) to the maximum scan length;
-    // labels are merged by name.  `unsupervised` is auto-detected when
-    // nullopt (unsupervised unless every cube is labeled).
-    explicit sam_dataset(std::vector<sam_scan> handlers, float pad_value = 0.0f,
+    // Build from one or more scan handlers using the merge options.
+    // `unsupervised` is auto-detected when nullopt (unsupervised unless
+    // every cube is labeled).
+    explicit sam_dataset(std::vector<sam_scan> handlers,
+                         const dataset_merge_options& options,
+                         std::optional<bool> unsupervised = std::nullopt);
+
+    // Compatibility overload using the default crop policy.  `pad_value` is
+    // retained for source compatibility and is ignored by crop; use the
+    // options overload with merge_mode::pad for padding.
+    explicit sam_dataset(std::vector<sam_scan> handlers,
+                         float pad_value = 0.0f,
                          std::optional<bool> unsupervised = std::nullopt);
 
     // IO
@@ -132,9 +141,26 @@ public:
     [[nodiscard]] const std::vector<double>& cube_resolutions() const noexcept {
         return cube_resolutions_;
     }
-    // A-scan lengths of each cube in samples.
+    // Original A-scan lengths of each source cube in samples.
     [[nodiscard]] const std::vector<std::int32_t>& scanlens() const noexcept {
         return scanlens_;
+    }
+    // Valid signal samples currently represented by each cube in X.  This
+    // equals the original scanlen under pad and the common merged width
+    // after crop/xcorr/zgate.
+    [[nodiscard]] const std::vector<std::int32_t>& valid_scanlens() const noexcept {
+        return valid_scanlens_;
+    }
+    // Source sampling rate of each cube in MHz.  Empty for legacy files.
+    [[nodiscard]] const std::vector<double>& cube_samplerates() const noexcept {
+        return cube_samplerates_;
+    }
+    // Common sampling rate in MHz, or nullopt when unknown/mixed.
+    [[nodiscard]] std::optional<double> samplerate() const noexcept;
+    // Merge policy used to construct the dataset.
+    [[nodiscard]] merge_mode merge() const noexcept { return merge_mode_; }
+    [[nodiscard]] std::string merge_mode_name() const {
+        return to_string(merge_mode_);
     }
 
     // Spatial provenance for every sample, computed from the cube shapes and
@@ -149,6 +175,76 @@ public:
     // "normalize", "savgol", "medfilt", "gate", "detrend", "envelope",
     // "moving_average".  Unknown strategies throw std::invalid_argument.
     void preprocess(const std::string& strategy, const preprocess_args& args = {});
+
+    // alignment over the whole pooled dataset (rows of X)
+
+    // Extract `scanlen` samples starting at each row's relative start.
+    // -1 marks an unaligned row and zero-fills it.
+    void align_manual(const std::vector<std::int32_t>& starts,
+                      std::int64_t scanlen);
+    // Align every row to the pooled reference row; keeps the common overlap.
+    void align_xcorr(size_t reference = 0, std::int64_t max_shift = 0,
+                     double max_gate_loss = 1.0);
+    // Keep `length` samples from each row's first threshold crossing.
+    void align_zgate(double threshold = 0.2, std::int64_t length = 2000);
+    // Align each row's envelope peak in [start_ns, start_ns+gate_ns) to the
+    // reference row.  Requires a common samplerate and valid signal length.
+    void align_tof(double gate_ns, size_t reference = 0,
+                   double start_ns = 0.0, double max_gate_loss = 1.0);
+
+    // spectral analysis over the whole pooled dataset (rows of X)
+
+    // STFT of all rows.  Requires a common sampling rate and a common valid
+    // length (use compute_stft_by_cube otherwise).  Times are relative to
+    // the start of each signal; the dataset stores no tzero.
+    [[nodiscard]] signal::stft_result compute_stft(
+        size_t nperseg = 256, size_t noverlap = 128, double f_min = 0.0,
+        double f_max = 0.0,
+        signal::window_kind window = signal::window_kind::hann) const;
+    [[nodiscard]] std::vector<signal::stft_result> compute_stft_by_cube(
+        size_t nperseg = 256, size_t noverlap = 128, double f_min = 0.0,
+        double f_max = 0.0,
+        signal::window_kind window = signal::window_kind::hann) const;
+    // Welch PSD of all rows.  Different valid lengths are allowed.
+    [[nodiscard]] signal::psd_result psd(
+        size_t nperseg = 256, size_t noverlap = 128, double f_min = 0.0,
+        double f_max = 0.0,
+        signal::window_kind window = signal::window_kind::hann) const;
+    [[nodiscard]] std::vector<signal::psd_result> psd_by_cube(
+        size_t nperseg = 256, size_t noverlap = 128, double f_min = 0.0,
+        double f_max = 0.0,
+        signal::window_kind window = signal::window_kind::hann) const;
+    // Power spectrogram of all rows; same constraints as compute_stft().
+    [[nodiscard]] signal::spectrogram_result power_spectrogram(
+        size_t nperseg = 256, size_t noverlap = 128, double f_min = 0.0,
+        double f_max = 0.0,
+        signal::window_kind window = signal::window_kind::hann) const;
+    [[nodiscard]] std::vector<signal::spectrogram_result>
+    power_spectrogram_by_cube(size_t nperseg = 256, size_t noverlap = 128,
+                              double f_min = 0.0, double f_max = 0.0,
+                              signal::window_kind window =
+                                  signal::window_kind::hann) const;
+    // Per-row STFT peak frequency/time.  Times are relative to each row's
+    // signal start.
+    [[nodiscard]] std::vector<float> stft_peak_frequency(
+        size_t nperseg = 256, size_t noverlap = 128, double f_min = 0.0,
+        double f_max = 0.0,
+        signal::window_kind window = signal::window_kind::hann) const;
+    [[nodiscard]] std::vector<float> stft_peak_time(
+        size_t nperseg = 256, size_t noverlap = 128, double f_min = 0.0,
+        double f_max = 0.0,
+        signal::window_kind window = signal::window_kind::hann) const;
+    // Flattened, optionally L1-normalized spectrogram features over all rows.
+    // Requires a common valid length across cubes.  `fs_mhz` overrides the
+    // stored sampling rate (useful for legacy files) and must agree with it
+    // when metadata is present.
+    [[nodiscard]] signal::spectrogram_features_result spectrogram_features(
+        const signal::spectrogram_feature_options& options = {},
+        std::optional<double> fs_mhz = std::nullopt) const;
+    // One-sided FFT magnitude of all rows.  Requires a common sampling rate
+    // and common valid length (use spectrum_by_cube otherwise).
+    [[nodiscard]] signal::spectrum_result spectrum() const;
+    [[nodiscard]] std::vector<signal::spectrum_result> spectrum_by_cube() const;
 
     // label delegation
 
@@ -192,6 +288,10 @@ public:
 
 private:
     void ensure_loaded() const;
+    [[nodiscard]] double require_samplerate() const;
+    [[nodiscard]] std::pair<size_t, size_t> cube_row_range_internal(
+        std::int32_t idx) const;
+    [[nodiscard]] array2d<float> cube_valid_rows(std::int32_t idx) const;
 
     // Data members are mutable: ensure_loaded() materializes a lazy-mode
     // dataset through const accessors (same pattern as sam_scan::data_).
@@ -200,6 +300,9 @@ private:
     std::vector<std::pair<std::int32_t, std::int32_t>> cube_shapes_;
     std::vector<double> cube_resolutions_;
     std::vector<std::int32_t> scanlens_;
+    std::vector<std::int32_t> valid_scanlens_;
+    std::vector<double> cube_samplerates_;
+    merge_mode merge_mode_ = merge_mode::crop;
     float pad_value_ = 0.0f;
     bool unsupervised_ = false;
     mutable std::optional<array2d<float>> z_;
